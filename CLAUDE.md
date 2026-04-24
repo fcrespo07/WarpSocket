@@ -105,15 +105,59 @@ El patrón: `platforms/base.py` define la interfaz; cada OS tiene su implementac
 | Config WG | `.conf.dpapi` (DPAPI) | `.conf` plano (`/etc/wireguard/`) | `.conf` plano |
 | Servicio del servidor | SCM (pywin32) | systemd unit | launchd plist |
 
+## Distribución e instalación
+
+Un único one-liner por OS:
+
+- Linux/macOS: `curl -fsSL <url>/install.sh | bash`
+- Windows: `irm <url>/install.ps1 | iex`
+
+El script bootstrap pregunta al usuario si instala **cliente** o **servidor**, descarga el repo, instala Python 3.11+ si falta, instala las deps y lanza el wizard correspondiente.
+
+**Modelo de empaquetado (fase inicial)**: instalación desde fuente con `pip install -e .` para ambos, cliente y servidor. El cliente migrará a binarios PyInstaller pre-construidos vía GitHub Releases cuando haya CI montada (evita el requisito de Python en la máquina del usuario). El servidor se queda con instalación desde fuente.
+
+Hosting del script: pendiente de decidir entre dominio propio y `raw.githubusercontent.com`. No bloquea el desarrollo.
+
+## TLS y endpoint del servidor
+
+El servidor está pensado para correr **sin dominio**. Implicaciones:
+
+- El wizard del servidor **detecta la IP pública** (consultando un servicio tipo `api.ipify.org`), la propone como endpoint y permite override por si el usuario sí tiene dominio.
+- El servidor **genera un certificado TLS auto-firmado** durante la instalación. wstunnel sigue usando WSS (necesario para atravesar firewalls corporativos).
+- El cliente **no valida contra una CA**: hace **pinning del fingerprint SHA256** del cert, embebido en el `.warpcfg`. Cero dependencia de Let's Encrypt / DuckDNS / dominios.
+- Ramas Let's Encrypt + dynamic DNS pueden añadirse más adelante como opción del wizard, pero no son la vía por defecto.
+
+## Bypass routing (¿necesario siempre?)
+
+Sí. Cuando WireGuard captura todo el tráfico (`AllowedIPs = 0.0.0.0/0`), el propio tráfico de wstunnel también caería dentro del túnel → loop. La excepción de routing hacia las IPs del endpoint es **obligatoria en cualquier setup**, no algo específico de Cloudflare.
+
+- Si el servidor está detrás de Cloudflare/CDN, son las IPs del proxy (varias).
+- Si el servidor es directo, es **una sola IP** (la pública del servidor).
+- El servidor calcula sus propias IPs de bypass durante la instalación y las **embebe en el `.warpcfg`** — el cliente las aplica tal cual, sin pedirlas al usuario.
+
+## Apertura de puertos
+
+Sí, el servidor necesita un puerto público abierto (default **443** para mimetizarse con HTTPS). El wizard del servidor:
+
+1. Pregunta qué puerto usar.
+2. Tras instalar, ejecuta un **probe de conectividad desde fuera** (servicio externo) y avisa si no llega.
+3. Imprime instrucciones específicas según el caso (router doméstico con port-forward vs. firewall de VPS).
+
+Para usuarios sin homelab: necesitan VPS (Oracle Free Tier, Hetzner, etc.). No hay forma de evitarlo manteniendo el modelo self-hosted.
+
 ## Configuración
 
-Un único `config.json` gestiona el cliente. Generado por el **wizard al primer arranque** (no se edita a mano).
+El servidor genera **un fichero `.warpcfg` por cliente** (formato JSON). Cada `.warpcfg` contiene todo lo necesario para conectarse — el cliente solo importa el fichero y arranca, sin más preguntas.
 
 ```json
 {
   "server": {
-    "url": "wss://tu-servidor.example.com",
-    "http_upgrade_path_prefix": "tu-secreto-aleatorio"
+    "endpoint": "203.0.113.42",
+    "port": 443,
+    "http_upgrade_path_prefix": "<secreto-aleatorio>"
+  },
+  "tls": {
+    "cert_fingerprint_sha256": "AB:CD:EF:..."
   },
   "tunnel": {
     "local_port": 51820,
@@ -121,10 +165,14 @@ Un único `config.json` gestiona el cliente. Generado por el **wizard al primer 
     "remote_port": 51820
   },
   "wireguard": {
-    "tunnel_name": "MiTunel"
+    "tunnel_name": "WarpSocket",
+    "client_address": "10.0.0.42/32",
+    "client_private_key": "<base64>",
+    "server_public_key": "<base64>",
+    "dns": ["1.1.1.1"]
   },
   "routing": {
-    "bypass_ips": ["188.114.96.5", "188.114.97.5"]
+    "bypass_ips": ["203.0.113.42"]
   },
   "reconnect": {
     "max_attempts": 5,
@@ -133,7 +181,18 @@ Un único `config.json` gestiona el cliente. Generado por el **wizard al primer 
 }
 ```
 
-El servidor genera este JSON al final de su wizard para que el usuario solo tenga que pegarlo en el cliente.
+**El `.warpcfg` es sensible**: contiene la clave privada WireGuard del cliente. Quien tenga el fichero ES ese cliente. Tratarlo como una credencial.
+
+El cliente, al importar el `.warpcfg`, lo guarda como `config.json` en la ruta de configuración del usuario (`%APPDATA%\WarpSocket\` en Windows, `~/.config/warpsocket/` en Linux/macOS).
+
+### Comandos del servidor
+
+Tras la instalación, el ejecutable del servidor expone subcomandos:
+
+- `warpsocket-server add-client <nombre>` — genera nuevo par de claves WG, asigna IP del pool, escribe `<nombre>.warpcfg` en el directorio actual.
+- `warpsocket-server list-clients` — lista clientes registrados.
+- `warpsocket-server revoke-client <nombre>` — elimina cliente del peer-list de WireGuard.
+- `warpsocket-server status` — estado del servicio wstunnel y de WireGuard.
 
 ## Funcionalidades heredadas del script original (a mantener)
 
@@ -167,11 +226,12 @@ WarpSocket irá bajo MIT o Apache-2.0 (decidir antes de publicar).
 
 ## Estado actual
 
-**Fase 0 — Planificación** ✅ (este documento)
+**Fase 0 — Planificación** ✅
+**Fase 1 — Scaffolding del cliente Python** ✅ (`client/pyproject.toml` + paquete `warpsocket/` con stub)
 
-**Siguiente**: bootstrapping del cliente Python — scaffolding de paquetes, `pyproject.toml`, config loader, wizard mínimo funcional.
+**Siguiente**: definir el schema y loader del `.warpcfg` (parser, validación, dataclasses tipadas, fichero de ejemplo).
 
-El repo todavía **no** está en GitHub. Se subirá como privado a `WarpSocket` una vez haya un primer esqueleto funcional.
+El repo está en GitHub como privado: https://github.com/fcrespo07/WarpSocket
 
 ## Notas para futuras sesiones
 
