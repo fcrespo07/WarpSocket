@@ -246,9 +246,11 @@ Tras la instalación, el ejecutable del servidor expone subcomandos:
 ## Estado actual
 
 **Fase 0 — Planificación** ✅
-**Fase 1 — Scaffolding del cliente Python** ✅ (`client/pyproject.toml` + paquete `warpsocket/` con stub)
+**Fase 1 — Scaffolding del cliente Python** ✅
+**Fase 2 — Schema y loader del `.warpcfg`** ✅ (`config.py` con dataclasses tipadas, validación, `import_warpcfg()`, 11 tests)
+**Fase 3 — Abstracción de plataforma** ✅ (`platforms/base.py` + `WindowsPlatform` real, Linux/macOS stubs, 21 tests con subprocess mockeado)
 
-**Siguiente**: definir el schema y loader del `.warpcfg` (parser, validación, dataclasses tipadas, fichero de ejemplo).
+**Siguiente**: `tunnel.py` — gestión del proceso wstunnel (lanzar, watchdog, reconexión con backoff) + integración con `platforms` para levantar/bajar el túnel WG y configurar las bypass routes. Primer flujo end-to-end en Windows.
 
 El repo está en GitHub como privado: https://github.com/fcrespo07/WarpSocket
 
