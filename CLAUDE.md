@@ -44,6 +44,8 @@ Se valoró C# + WinForms (descartado: no cross-platform sin reescribir UI entera
 | Installer Linux | `.deb` / AppImage / script |
 | Installer macOS | `.app` + `.dmg` |
 
+**Versión TUI futura**: hay un acuerdo de hacer una segunda versión del cliente como TUI (probablemente con [`textual`](https://textual.textualize.io/)) cuando la versión GUI sea estable. Encajaría como cliente alternativo del mismo `TunnelManager` — la lógica de túnel ya está separada de la UI y puede compartirse.
+
 ### Servidor
 
 - Wizard CLI interactivo (`questionary` o `rich` + `prompt_toolkit`).
@@ -115,6 +117,8 @@ Un único one-liner por OS:
 El script bootstrap pregunta al usuario si instala **cliente** o **servidor**, descarga el repo, instala Python 3.11+ si falta, instala las deps y lanza el wizard correspondiente.
 
 **Modelo de empaquetado (fase inicial)**: instalación desde fuente con `pip install -e .` para ambos, cliente y servidor. El cliente migrará a binarios PyInstaller pre-construidos vía GitHub Releases cuando haya CI montada (evita el requisito de Python en la máquina del usuario). El servidor se queda con instalación desde fuente.
+
+**Registro como servicio**: el `install.sh`/`install.ps1` registra automáticamente el binario como servicio del SO al final del wizard (Windows Service / systemd unit / launchd plist). El usuario no tiene que hacer nada extra para que arranque al iniciar sesión.
 
 Hosting del script: pendiente de decidir entre dominio propio y `raw.githubusercontent.com`. No bloquea el desarrollo.
 
