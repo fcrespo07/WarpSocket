@@ -208,13 +208,32 @@ Tras la instalación, el ejecutable del servidor expone subcomandos:
 
 ## Licencia
 
-**wstunnel** está bajo **BSD-3-Clause**. Implicaciones para WarpSocket:
+**WarpSocket** se distribuye bajo **MIT**. Confirmar antes de publicar la primera versión estable.
 
-- ✅ Se puede redistribuir el binario de wstunnel junto con WarpSocket manteniendo aviso de copyright y disclaimer.
-- ✅ Se pueden crear derivados y modificarlos.
-- ❌ **No se puede usar el nombre "wstunnel"** ni nombres de contribuyentes para endosar o promocionar WarpSocket. Por eso el proyecto se llama **WarpSocket** y no "wstunnel-gui" o similar.
+### Dependencias y sus licencias
 
-WarpSocket irá bajo MIT o Apache-2.0 (decidir antes de publicar).
+| Componente | Licencia | Notas |
+|---|---|---|
+| wstunnel | BSD-3-Clause | Bundleable con atribución. No usar el nombre "wstunnel" para promover WarpSocket. |
+| WireGuard (kernel/tools/Windows) | GPL-2.0 | Invocado vía subprocess, no linked → no contamina. Instalado por el OS package manager, no bundleado. Sin obligaciones GPL mientras no se incluya el binario en el instalador. |
+| Protocolo WireGuard | Sin patente | Libre. |
+| pystray | LGPL-3.0 | ⚠️ En binarios PyInstaller usar modo **one-folder** (no one-file) para que el usuario pueda reemplazar la lib. Incluir texto LGPL en `THIRD_PARTY_LICENSES`. |
+| customtkinter | MIT | Sin restricciones. |
+| Pillow | MIT-CMU (HPND) | Sin restricciones. |
+| platformdirs | MIT | Sin restricciones. |
+| Python (CPython) | PSF (BSD-style) | Sin restricciones. |
+
+### Marcas registradas
+
+- **"WireGuard"** es trademark de Jason Donenfeld. No usar en el nombre del proyecto ni para implicar endorsement.
+- **"wstunnel"** — misma restricción (BSD-3-Clause cláusula 3). Por eso el proyecto se llama WarpSocket.
+
+### Checklist antes de publicar la primera versión estable
+
+- [ ] Confirmar licencia MIT (o cambiar a Apache-2.0 si se esperan contribuciones corporativas).
+- [ ] Añadir fichero `LICENSE` en la raíz con el texto MIT.
+- [ ] Añadir fichero `THIRD_PARTY_LICENSES` con BSD-3-Clause de wstunnel + LGPL-3.0 de pystray.
+- [ ] Verificar que no queden referencias a `vpn.fcrespo.tech`, `ClaveSegura123`, `10.43.9.43`, `PortatilDesbloqueado` ni IPs del autor.
 
 ## Convenciones de código
 
