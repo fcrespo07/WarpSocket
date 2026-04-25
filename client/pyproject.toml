@@ -26,6 +26,7 @@ dependencies = [
     "pystray>=0.19",
     "customtkinter>=5.2",
     "Pillow>=10.0",
+    "platformdirs>=4.0",
 ]
 
 [project.optional-dependencies]
