@@ -247,10 +247,14 @@ Tras la instalación, el ejecutable del servidor expone subcomandos:
 
 **Fase 0 — Planificación** ✅
 **Fase 1 — Scaffolding del cliente Python** ✅
-**Fase 2 — Schema y loader del `.warpcfg`** ✅ (`config.py` con dataclasses tipadas, validación, `import_warpcfg()`, 11 tests)
-**Fase 3 — Abstracción de plataforma** ✅ (`platforms/base.py` + `WindowsPlatform` real, Linux/macOS stubs, 21 tests con subprocess mockeado)
+**Fase 2 — Schema y loader del `.warpcfg`** ✅
+**Fase 3 — Abstracción de plataforma** ✅
+**Fase 4a — Orquestador del túnel** ✅ (`wireguard.py`, `network.py`, `tunnel.py`: build de la conf WG, TLS pinning en Python, `Tunnel.connect()/disconnect()`)
+**Fase 4b — Watchdog y reconexión** ✅ (`TunnelManager` con thread de monitorización, backoff de la config, máquina de estados `DISCONNECTED/CONNECTING/CONNECTED/RECONNECTING/FAILED`, listeners para que el tray se enganche)
 
-**Siguiente**: `tunnel.py` — gestión del proceso wstunnel (lanzar, watchdog, reconexión con backoff) + integración con `platforms` para levantar/bajar el túnel WG y configurar las bypass routes. Primer flujo end-to-end en Windows.
+**72 tests** pasando (subprocess/socket/ssl mockeado; corren en cualquier OS).
+
+**Siguiente**: tray icon (`tray.py` con pystray) que se suscribe al `TunnelManager` y refleja el estado, más wizard inicial para importar el `.warpcfg`. Esto cierra el flujo end-to-end en Windows: doble-clic al `.warpcfg` → tray icono activo → conectado.
 
 El repo está en GitHub como privado: https://github.com/fcrespo07/WarpSocket
 

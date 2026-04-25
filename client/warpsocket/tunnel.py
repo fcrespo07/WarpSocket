@@ -5,7 +5,11 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+from enum import Enum
 from pathlib import Path
+from threading import Event, Lock, Thread
+from typing import Callable
 
 from platformdirs import user_data_dir
 
@@ -18,6 +22,17 @@ _APP_NAME = "WarpSocket"
 _ENV_OVERRIDE = "WARPSOCKET_WSTUNNEL"
 
 log = logging.getLogger(__name__)
+
+
+class TunnelState(Enum):
+    DISCONNECTED = "disconnected"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    RECONNECTING = "reconnecting"
+    FAILED = "failed"
+
+
+StateListener = Callable[[TunnelState], None]
 
 
 class TunnelError(RuntimeError):
@@ -147,3 +162,120 @@ class Tunnel:
         if self._proc is None or self._proc.poll() is not None:
             return False
         return self._platform.is_wg_tunnel_active(self._config.wireguard.tunnel_name)
+
+
+def _pick_delay(delays: list[int], attempt_just_failed: int) -> int:
+    if not delays:
+        return 5
+    idx = min(max(attempt_just_failed - 1, 0), len(delays) - 1)
+    return delays[idx]
+
+
+class TunnelManager:
+    def __init__(
+        self,
+        config: ClientConfig,
+        tunnel: Tunnel | None = None,
+        *,
+        stability_seconds: float = 30.0,
+        poll_interval: float = 1.0,
+    ) -> None:
+        self._config = config
+        self._tunnel = tunnel or Tunnel(config)
+        self._stability = stability_seconds
+        self._poll = poll_interval
+        self._state = TunnelState.DISCONNECTED
+        self._lock = Lock()
+        self._listeners: list[StateListener] = []
+        self._stop_event = Event()
+        self._thread: Thread | None = None
+
+    @property
+    def state(self) -> TunnelState:
+        with self._lock:
+            return self._state
+
+    def add_listener(self, callback: StateListener) -> None:
+        with self._lock:
+            self._listeners.append(callback)
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._thread = Thread(target=self._run, daemon=True, name="warpsocket-tunnel")
+            self._thread.start()
+
+    def stop(self, timeout: float = 10.0) -> None:
+        self._stop_event.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=timeout)
+        try:
+            self._tunnel.disconnect()
+        except Exception:
+            log.exception("Error while disconnecting tunnel during stop()")
+        self._set_state(TunnelState.DISCONNECTED)
+
+    def _set_state(self, state: TunnelState) -> None:
+        with self._lock:
+            if self._state == state:
+                return
+            self._state = state
+            listeners = list(self._listeners)
+        for cb in listeners:
+            try:
+                cb(state)
+            except Exception:
+                log.exception("State listener raised")
+
+    def _run(self) -> None:
+        attempt = 0
+        max_attempts = self._config.reconnect.max_attempts
+        delays = self._config.reconnect.delays_seconds
+
+        while not self._stop_event.is_set():
+            self._set_state(
+                TunnelState.CONNECTING if attempt == 0 else TunnelState.RECONNECTING
+            )
+            try:
+                self._tunnel.connect()
+            except Exception as exc:
+                log.warning("Connect attempt %d failed: %s", attempt + 1, exc)
+                attempt += 1
+                if attempt >= max_attempts:
+                    self._set_state(TunnelState.FAILED)
+                    return
+                if self._stop_event.wait(_pick_delay(delays, attempt)):
+                    return
+                continue
+
+            self._set_state(TunnelState.CONNECTED)
+            connected_at = time.monotonic()
+            stability_reset = False
+
+            while not self._stop_event.is_set():
+                if not self._tunnel.is_active:
+                    break
+                if not stability_reset and time.monotonic() - connected_at >= self._stability:
+                    attempt = 0
+                    stability_reset = True
+                if self._stop_event.wait(self._poll):
+                    return
+
+            if self._stop_event.is_set():
+                return
+
+            log.warning("Tunnel died unexpectedly; cleaning up before retry")
+            try:
+                self._tunnel.disconnect()
+            except Exception:
+                log.exception("Cleanup after unexpected tunnel death failed")
+
+            attempt += 1
+            if attempt >= max_attempts:
+                self._set_state(TunnelState.FAILED)
+                return
+            if self._stop_event.wait(_pick_delay(delays, attempt)):
+                return
