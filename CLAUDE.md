@@ -258,11 +258,22 @@ Tras la instalación, el ejecutable del servidor expone subcomandos:
 **Fase 5a — Tray icon y logs** ✅ (`tray.py` con pystray: icono con punto de color por estado, menú contextual con Ver logs / Reconectar / Importar .warpcfg / Salir. `logs.py` con rotación 512 KB y `MemoryLogHandler` para ventana de logs en vivo)
 **Fase 5b — Wizard y app.py end-to-end** ✅ (`wizard.py`: ventana customtkinter para importar `.warpcfg` con validación y feedback. `app.py`: entry point real con mutex de instancia única — `CreateMutexW` en Windows, `fcntl.flock` en POSIX —, carga de config o wizard, instanciación de `TunnelManager` + `TrayApp`, visor de logs en vivo, cleanup al salir)
 
-**104 tests** pasando (subprocess/socket/ssl/tkinter mockeado; corren en cualquier OS).
+**104 tests del cliente** pasando (subprocess/socket/ssl/tkinter mockeado; corren en cualquier OS).
 
 **Flujo end-to-end en Windows cerrado**: el usuario importa un `.warpcfg` → wizard valida y guarda como `config.json` → tray icon activo → `TunnelManager` conecta → icono refleja estado → menú permite reconectar, ver logs, re-importar config, salir.
 
-**Siguiente**: pruebas manuales del flujo end-to-end en Windows con un servidor real (o mock local de wstunnel). Tras validar, portar a Linux (implementar `LinuxPlatform` real en `platforms/linux.py`), luego macOS, y finalmente el componente servidor.
+---
+
+**Fase Servidor S1 — Scaffolding + Config** ✅ (`server/`: pyproject.toml con entry point `warpsocket-server`, `config.py` con `ServerConfig` + `ClientEntry` dataclasses, `cli.py` con argparse + 5 subcomandos)
+**Fase Servidor S2 — Crypto** ✅ (`crypto.py`: `generate_tls_cert` con EC P-256 self-signed + SAN automático IP/DNS, `compute_cert_fingerprint` SHA-256, `generate_wg_keypair` via `wg genkey`/`wg pubkey`)
+**Fase Servidor S3 — IP Pool + WG server config** ✅ (`ip_pool.py` con `next_available_ip` y `PoolExhaustedError`, `wireguard.py` con `build_server_wg_conf` + `add_peer_live`/`remove_peer_live` para hot-reload)
+**Fase Servidor S4 — warpcfg + comandos de gestión** ✅ (`warpcfg.py` que construye el dict compatible con `ClientConfig` del cliente; `add-client`, `list-clients`, `revoke-client` implementados con rich tables)
+**Fase Servidor S5 — Plataforma Linux + setup wizard** ✅ (`platforms/`: ABC `ServerPlatform` + `LinuxServerPlatform` con systemd unit + `wg-quick`/`wg syncconf`; macOS y Windows como stubs. `setup_wizard.py` interactivo con rich: detección de IP pública, generación de cert/keys, instalación de servicios, probe localhost)
+**Fase Servidor S6 — Status command** ✅ (`warpsocket-server status` con tabla rich mostrando endpoint, subnet, contador de clientes y estado de wstunnel/WG)
+
+**72 tests del servidor** pasando (cryptography real + subprocess/urllib mockeado; corren en cualquier OS).
+
+**Siguiente**: pruebas manuales en una VM Linux real (Ubuntu/Debian) — `sudo warpsocket-server setup`, `add-client test`, copiar el `.warpcfg` al cliente Windows y validar el túnel end-to-end. Tras validar, implementar `LinuxPlatform` del cliente, luego macOS (cliente y servidor), luego Windows en el servidor.
 
 El repo está en GitHub como privado: https://github.com/fcrespo07/WarpSocket
 
