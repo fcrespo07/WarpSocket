@@ -70,3 +70,6 @@ logs/
 wstunnel
 wstunnel.exe
 wstunnel_*/
+
+# Windows bash crash dumps
+*.stackdump
