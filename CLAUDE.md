@@ -255,10 +255,14 @@ Tras la instalación, el ejecutable del servidor expone subcomandos:
 **Fase 3 — Abstracción de plataforma** ✅
 **Fase 4a — Orquestador del túnel** ✅ (`wireguard.py`, `network.py`, `tunnel.py`: build de la conf WG, TLS pinning en Python, `Tunnel.connect()/disconnect()`)
 **Fase 4b — Watchdog y reconexión** ✅ (`TunnelManager` con thread de monitorización, backoff de la config, máquina de estados `DISCONNECTED/CONNECTING/CONNECTED/RECONNECTING/FAILED`, listeners para que el tray se enganche)
+**Fase 5a — Tray icon y logs** ✅ (`tray.py` con pystray: icono con punto de color por estado, menú contextual con Ver logs / Reconectar / Importar .warpcfg / Salir. `logs.py` con rotación 512 KB y `MemoryLogHandler` para ventana de logs en vivo)
+**Fase 5b — Wizard y app.py end-to-end** ✅ (`wizard.py`: ventana customtkinter para importar `.warpcfg` con validación y feedback. `app.py`: entry point real con mutex de instancia única — `CreateMutexW` en Windows, `fcntl.flock` en POSIX —, carga de config o wizard, instanciación de `TunnelManager` + `TrayApp`, visor de logs en vivo, cleanup al salir)
 
-**72 tests** pasando (subprocess/socket/ssl mockeado; corren en cualquier OS).
+**104 tests** pasando (subprocess/socket/ssl/tkinter mockeado; corren en cualquier OS).
 
-**Siguiente**: tray icon (`tray.py` con pystray) que se suscribe al `TunnelManager` y refleja el estado, más wizard inicial para importar el `.warpcfg`. Esto cierra el flujo end-to-end en Windows: doble-clic al `.warpcfg` → tray icono activo → conectado.
+**Flujo end-to-end en Windows cerrado**: el usuario importa un `.warpcfg` → wizard valida y guarda como `config.json` → tray icon activo → `TunnelManager` conecta → icono refleja estado → menú permite reconectar, ver logs, re-importar config, salir.
+
+**Siguiente**: pruebas manuales del flujo end-to-end en Windows con un servidor real (o mock local de wstunnel). Tras validar, portar a Linux (implementar `LinuxPlatform` real en `platforms/linux.py`), luego macOS, y finalmente el componente servidor.
 
 El repo está en GitHub como privado: https://github.com/fcrespo07/WarpSocket
 
