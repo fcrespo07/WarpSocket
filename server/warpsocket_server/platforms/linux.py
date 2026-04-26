@@ -100,11 +100,13 @@ class LinuxServerPlatform(ServerPlatform):
         except OSError as exc:
             raise PlatformError(f"Failed to write WG config: {exc}") from exc
 
+        unit = f"wg-quick@{interface}.service"
         try:
             if self.is_wg_active(interface):
                 self.reload_wg(interface)
+                _run(["systemctl", "enable", unit], check=False)
             else:
-                _run(["wg-quick", "up", interface])
+                _run(["systemctl", "enable", "--now", unit])
         except subprocess.CalledProcessError as exc:
             raise PlatformError(
                 f"Failed to bring up WireGuard {interface}: {exc.stderr.strip()}"
@@ -125,8 +127,7 @@ class LinuxServerPlatform(ServerPlatform):
             raise PlatformError(f"wg syncconf failed: {exc.stderr.strip()}") from exc
 
     def is_wg_active(self, interface: str = "wg0") -> bool:
-        result = _run(["wg", "show", interface], check=False)
-        return result.returncode == 0
+        return Path(f"/sys/class/net/{interface}").exists()
 
     def wg_config_dir(self) -> Path:
         return Path("/etc/wireguard")

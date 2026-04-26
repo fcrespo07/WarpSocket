@@ -65,12 +65,16 @@ class TestLinuxPlatform:
         mock_run.return_value = MagicMock(stdout="inactive\n")
         assert LinuxServerPlatform().is_wstunnel_running() is False
 
-    @patch("warpsocket_server.platforms.linux._run")
-    def test_is_wg_active(self, mock_run: MagicMock) -> None:
-        mock_run.return_value = MagicMock(returncode=0)
-        assert LinuxServerPlatform().is_wg_active() is True
+    @patch("warpsocket_server.platforms.linux.Path")
+    def test_is_wg_active(self, mock_path_cls: MagicMock) -> None:
+        instance = MagicMock()
+        mock_path_cls.return_value = instance
 
-        mock_run.return_value = MagicMock(returncode=1)
+        instance.exists.return_value = True
+        assert LinuxServerPlatform().is_wg_active() is True
+        mock_path_cls.assert_called_with("/sys/class/net/wg0")
+
+        instance.exists.return_value = False
         assert LinuxServerPlatform().is_wg_active() is False
 
     @patch("warpsocket_server.platforms.linux._run")
