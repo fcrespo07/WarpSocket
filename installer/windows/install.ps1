@@ -309,8 +309,16 @@ function Resolve-Repo {
 
     $script:REPO_DIR = $DEFAULT_REPO_DIR
     if (Test-Path $script:REPO_DIR) {
-        Write-Warn "Directory $($script:REPO_DIR) already exists - using as-is"
-        return
+        # Validate it actually looks like a clone, not a stale directory left over
+        # from a previous failed run (git missing, network error, etc.).
+        if ((Test-Path (Join-Path $script:REPO_DIR 'CLAUDE.md')) -and
+            (Test-Path (Join-Path $script:REPO_DIR 'client'))    -and
+            (Test-Path (Join-Path $script:REPO_DIR 'server'))) {
+            Write-Warn "Directory $($script:REPO_DIR) already exists - using as-is"
+            return
+        }
+        Write-Warn "Directory $($script:REPO_DIR) exists but looks incomplete - recloning"
+        Remove-Item -Recurse -Force $script:REPO_DIR
     }
 
     $ghCmd = Get-Command gh -ErrorAction SilentlyContinue
