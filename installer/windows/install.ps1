@@ -321,22 +321,32 @@ function Resolve-Repo {
         Remove-Item -Recurse -Force $script:REPO_DIR
     }
 
+    # Native exe stderr + 2>&1 in PS 5.1 = NativeCommandError that aborts
+    # under $ErrorActionPreference='Stop'. Let git/gh write naturally and
+    # rely on $LASTEXITCODE for success/failure.
     $ghCmd = Get-Command gh -ErrorAction SilentlyContinue
     if ($ghCmd) {
-        & gh auth status 2>&1 | Out-Null
+        & gh auth status *> $null
         if ($LASTEXITCODE -eq 0) {
             Write-Info "Cloning via gh (authenticated)"
             & gh repo clone $GITHUB_REPO $script:REPO_DIR
-            Write-OK "Cloned to: $($script:REPO_DIR)"
-            return
+            if ($LASTEXITCODE -eq 0) {
+                Write-OK "Cloned to: $($script:REPO_DIR)"
+                return
+            }
+            Write-Warn "gh repo clone failed - falling back to HTTPS git clone"
         }
     }
 
     Write-Warn "gh not authenticated - trying HTTPS clone (will fail fast if repo is private)"
     $env:GIT_TERMINAL_PROMPT = '0'
-    & git clone $GITHUB_REPO_URL $script:REPO_DIR 2>&1 | ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) {
+    try {
+        & git clone $GITHUB_REPO_URL $script:REPO_DIR
+        $cloneExit = $LASTEXITCODE
+    } finally {
         Remove-Item Env:GIT_TERMINAL_PROMPT -ErrorAction SilentlyContinue
+    }
+    if ($cloneExit -ne 0) {
         Write-Fail @"
 git clone failed. If the repo is private, either:
   1) Install + auth gh:  gh auth login  and re-run this installer
@@ -344,7 +354,6 @@ git clone failed. If the repo is private, either:
        `$env:WARPSOCKET_REPO_DIR = 'C:\path\to\WarpSocket'; .\install.ps1
 "@
     }
-    Remove-Item Env:GIT_TERMINAL_PROMPT -ErrorAction SilentlyContinue
     Write-OK "Cloned to: $($script:REPO_DIR)"
 }
 
