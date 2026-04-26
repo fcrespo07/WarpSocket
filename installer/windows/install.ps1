@@ -75,17 +75,52 @@ function Assert-Admin {
 # ---------------------------------------------------------------------------
 $script:PYTHON_BIN = $null
 
+function Test-PythonExe {
+    # Returns the resolved sys.executable if the candidate is a usable Python >=3.11,
+    # otherwise $null. The candidate may be a Microsoft Store App Execution Alias —
+    # if Python is actually installed those aliases resolve to the real interpreter,
+    # so we invoke them instead of pre-filtering by path. Stubs without a real
+    # Python behind them write nothing to stdout and are skipped via the output
+    # check below.
+    param([string]$Exe, [string[]]$ExtraArgs = @())
+    if (-not $Exe) { return $null }
+    # Use single-quoted f-string inside Python so the whole code can live in a
+    # PowerShell double-quoted string without quote-escaping pitfalls.
+    $code = "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor};{sys.executable}')"
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $Exe @ExtraArgs -c $code 2>$null
+    } catch {
+        return $null
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($LASTEXITCODE -ne 0 -or -not $out) { return $null }
+    $line = ($out | Select-Object -First 1).ToString().Trim()
+    if ($line -notmatch '^(\d+)\.(\d+);(.+)$') { return $null }
+    if ([int]$Matches[1] -ne 3 -or [int]$Matches[2] -lt 11) { return $null }
+    $resolved = $Matches[3].Trim()
+    if (-not (Test-Path $resolved)) { return $null }
+    return $resolved
+}
+
 function Find-Python311 {
-    foreach ($py in @('python3.13', 'python3.12', 'python3.11', 'python3', 'python')) {
-        $cmd = Get-Command $py -ErrorAction SilentlyContinue
+    # 1) Prefer the py.exe launcher (canonical on Windows). Try newest first.
+    $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
+    if ($pyLauncher) {
+        foreach ($flag in '-3.13', '-3.12', '-3.11', '-3') {
+            $resolved = Test-PythonExe -Exe $pyLauncher.Source -ExtraArgs @($flag)
+            if ($resolved) { $script:PYTHON_BIN = $resolved; return $true }
+        }
+    }
+
+    # 2) Fall back to PATH lookups, skipping the Store stub.
+    foreach ($name in 'python3.13', 'python3.12', 'python3.11', 'python3', 'python') {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
         if (-not $cmd) { continue }
-        try {
-            $ver = & $cmd.Source -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>$null
-            if ($ver -match '^(\d+)\.(\d+)$' -and [int]$Matches[1] -eq 3 -and [int]$Matches[2] -ge 11) {
-                $script:PYTHON_BIN = $cmd.Source
-                return $true
-            }
-        } catch { continue }
+        $resolved = Test-PythonExe -Exe $cmd.Source
+        if ($resolved) { $script:PYTHON_BIN = $resolved; return $true }
     }
     return $false
 }
