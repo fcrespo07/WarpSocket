@@ -28,6 +28,7 @@ $DEFAULT_REPO_DIR          = Join-Path $env:USERPROFILE "WarpSocket"
 $GITHUB_REPO               = "fcrespo07/WarpSocket"
 $GITHUB_REPO_URL           = "https://github.com/$GITHUB_REPO"
 $WSTUNNEL_FALLBACK_VERSION = "v10.5.2"
+$PYTHON_FALLBACK_VERSION   = "3.12.8"   # used when winget is not available
 
 # ---------------------------------------------------------------------------
 # UI helpers
@@ -94,12 +95,39 @@ function Refresh-SessionPath {
                 [System.Environment]::GetEnvironmentVariable('PATH', 'User')
 }
 
-function Install-Python {
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        Write-Fail "winget not found and Python 3.11+ is missing. Install Python from https://python.org then re-run."
+function Install-Python-Direct {
+    # Fallback when winget is not available: download the MSI from python.org.
+    $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
+        'AMD64' { 'amd64' }
+        'ARM64' { 'arm64' }
+        default { 'amd64' }
     }
-    Write-Info "Installing Python 3.12 via winget..."
-    & winget install --id Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
+    $pyInstaller = "python-${PYTHON_FALLBACK_VERSION}-${arch}.exe"
+    $pyUrl       = "https://www.python.org/ftp/python/${PYTHON_FALLBACK_VERSION}/${pyInstaller}"
+    $tmpPath     = Join-Path $env:TEMP $pyInstaller
+
+    Write-Info "Downloading Python $PYTHON_FALLBACK_VERSION from python.org..."
+    Invoke-WebRequest -Uri $pyUrl -OutFile $tmpPath -UseBasicParsing
+
+    Write-Info "Running Python installer (silent, system-wide)..."
+    $proc = Start-Process -FilePath $tmpPath `
+        -ArgumentList '/quiet', 'InstallAllUsers=1', 'PrependPath=1', 'Include_test=0' `
+        -Wait -PassThru
+    Remove-Item $tmpPath -ErrorAction SilentlyContinue
+
+    if ($proc.ExitCode -ne 0) {
+        Write-Fail "Python installer exited with code $($proc.ExitCode). Install manually from https://python.org and retry."
+    }
+}
+
+function Install-Python {
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Info "Installing Python 3.12 via winget..."
+        & winget install --id Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
+    } else {
+        Write-Warn "winget not found - falling back to direct download from python.org"
+        Install-Python-Direct
+    }
     Refresh-SessionPath
     if (-not (Find-Python311)) {
         Write-Fail "Python 3.11+ install failed. Install manually from https://python.org and retry."
