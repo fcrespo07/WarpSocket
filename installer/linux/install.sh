@@ -379,7 +379,11 @@ install_server() {
     [[ -d "$REPO_DIR/server" ]] || die "Server source not found at $REPO_DIR/server"
 
     $SUDO mkdir -p "$INSTALL_PREFIX"
-    if [[ ! -d "$INSTALL_PREFIX/.venv" ]]; then
+    if [[ ! -x "$INSTALL_PREFIX/.venv/bin/pip" ]]; then
+        if [[ -d "$INSTALL_PREFIX/.venv" ]]; then
+            warn "Existing venv at $INSTALL_PREFIX/.venv is broken - recreating"
+            $SUDO rm -rf "$INSTALL_PREFIX/.venv"
+        fi
         info "Creating venv with $PYTHON_BIN"
         $SUDO "$PYTHON_BIN" -m venv "$INSTALL_PREFIX/.venv"
     else
@@ -572,7 +576,11 @@ install_client() {
     ensure_client_system_deps
 
     $SUDO mkdir -p "$CLIENT_PREFIX"
-    if [[ ! -d "$CLIENT_PREFIX/.venv" ]]; then
+    if [[ ! -x "$CLIENT_PREFIX/.venv/bin/pip" ]]; then
+        if [[ -d "$CLIENT_PREFIX/.venv" ]]; then
+            warn "Existing client venv at $CLIENT_PREFIX/.venv is broken - recreating"
+            $SUDO rm -rf "$CLIENT_PREFIX/.venv"
+        fi
         info "Creating client venv with $PYTHON_BIN"
         $SUDO "$PYTHON_BIN" -m venv "$CLIENT_PREFIX/.venv"
     else
