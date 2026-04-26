@@ -303,7 +303,7 @@ function Resolve-Repo {
             Write-Fail "git and winget not found. Install Git from https://git-scm.com and retry."
         }
         Write-Info "Installing Git via winget..."
-        & winget install --id Git.Git --silent --accept-package-agreements --accept-source-agreements
+        & winget install --id Git.Git --source winget --silent --accept-package-agreements --accept-source-agreements
         Refresh-SessionPath
     }
 
@@ -420,7 +420,7 @@ function Install-Client {
             Write-Fail "winget not found and WireGuard is missing. Install from https://www.wireguard.com/install/ and retry."
         }
         Write-Info "Installing WireGuard for Windows via winget..."
-        & winget install --id WireGuard.WireGuard --silent --accept-package-agreements --accept-source-agreements
+        & winget install --id WireGuard.WireGuard --source winget --silent --accept-package-agreements --accept-source-agreements
         if (-not (Test-Path $WG_EXE)) {
             Write-Fail "WireGuard install failed. Install from https://www.wireguard.com/install/ and retry."
         }
