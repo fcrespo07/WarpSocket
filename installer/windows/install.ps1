@@ -123,7 +123,7 @@ function Install-Python-Direct {
 function Install-Python {
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-Info "Installing Python 3.12 via winget..."
-        & winget install --id Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
+        & winget install --id Python.Python.3.12 --source winget --silent --accept-package-agreements --accept-source-agreements
     } else {
         Write-Warn "winget not found - falling back to direct download from python.org"
         Install-Python-Direct
