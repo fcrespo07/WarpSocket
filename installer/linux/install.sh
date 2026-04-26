@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# WarpSocket — Linux installer / bootstrapper
+# WarpSocket - Linux installer / bootstrapper
 #
 # Two ways to run:
 #   1. Local (from a clone):    sudo bash installer/linux/install.sh
@@ -11,12 +11,12 @@
 #   WARPSOCKET_RUN_WIZARD=0               Skip the final `warpsocket-server setup`
 #   WSTUNNEL_VERSION=v10.5.2              Pin a specific wstunnel release
 #   WARPSOCKET_FORCE_IPV4=0               Disable the default IPv4-only mode for apt/curl
-#                                         (default: 1 — many bridged-VM LANs have broken IPv6)
+#                                         (default: 1 - many bridged-VM LANs have broken IPv6)
 
 set -euo pipefail
 
 # IPv4-only is the default: bridged VMs frequently get an IPv6 address via SLAAC
-# from a router whose upstream doesn't actually route IPv6 → curl/apt hang for
+# from a router whose upstream doesn't actually route IPv6 -> curl/apt hang for
 # minutes on TCP timeout per mirror. Override with WARPSOCKET_FORCE_IPV4=0.
 FORCE_IPV4="${WARPSOCKET_FORCE_IPV4:-1}"
 CURL_OPTS=(--fail --silent --show-error --location --connect-timeout 10 --max-time 300)
@@ -47,9 +47,9 @@ else
 fi
 
 info()  { printf '%s==>%s %s\n' "$CYAN" "$RESET" "$*"; }
-ok()    { printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$*"; }
-warn()  { printf '  %s⚠%s %s\n' "$YELLOW" "$RESET" "$*"; }
-err()   { printf '  %s✗%s %s\n' "$RED" "$RESET" "$*" >&2; }
+ok()    { printf '  %s[OK]%s %s\n' "$GREEN" "$RESET" "$*"; }
+warn()  { printf '  %s[!]%s  %s\n' "$YELLOW" "$RESET" "$*"; }
+err()   { printf '  %s[X]%s  %s\n' "$RED" "$RESET" "$*" >&2; }
 die()   { err "$*"; exit 1; }
 
 # Read from /dev/tty so prompts work even when piped via curl|bash
@@ -85,7 +85,7 @@ ${BOLD}${CYAN}
   |__/|__/\\_,_/_/  \\_,_/ .__/___/\\___/\\__/_/\\_\\\\__/\\__/
                        /_/
 ${RESET}
-  ${DIM}WireGuard over WebSocket — Linux installer${RESET}
+  ${DIM}WireGuard over WebSocket - Linux installer${RESET}
 
 EOF
 }
@@ -165,8 +165,8 @@ find_python() {
 
 _add_deadsnakes_apt_source() {
     # `add-apt-repository -y ppa:deadsnakes/ppa` breaks on Linux Mint because
-    # `lsb_release -cs` returns the Mint codename (vanessa/wilma/…) which has no
-    # corresponding deadsnakes release → either 404 or hours-long retry loop.
+    # `lsb_release -cs` returns the Mint codename (vanessa/wilma/...) which has no
+    # corresponding deadsnakes release -> either 404 or hours-long retry loop.
     # We instead read UBUNTU_CODENAME from /etc/os-release and write the apt
     # source manually, with a signed-by keyring.
     local ubuntu_codename keyring keyfile
@@ -202,7 +202,7 @@ install_python() {
             if $SUDO bash -c "$PKG_INSTALL_CMD python3.12 python3.12-venv" 2>/dev/null; then
                 :
             else
-                warn "python3.12 not in default repos — adding deadsnakes PPA"
+                warn "python3.12 not in default repos - adding deadsnakes PPA"
                 _add_deadsnakes_apt_source
                 info "Refreshing apt index after adding PPA"
                 $SUDO bash -c "$PKG_UPDATE_CMD" >/dev/null
@@ -216,14 +216,14 @@ install_python() {
             $SUDO bash -c "$PKG_INSTALL_CMD python"
             ;;
     esac
-    find_python || die "Python 3.11+ install failed — install manually and rerun"
+    find_python || die "Python 3.11+ install failed - install manually and rerun"
 }
 
 ensure_python() {
     if find_python; then
         ok "Python: ${BOLD}${PYTHON_BIN}${RESET} ($($PYTHON_BIN --version))"
     else
-        warn "Python 3.11+ not found — installing"
+        warn "Python 3.11+ not found - installing"
         install_python
         ok "Python installed: ${BOLD}${PYTHON_BIN}${RESET}"
     fi
@@ -245,7 +245,7 @@ ensure_wireguard() {
     esac
 
     if ! $SUDO modprobe wireguard 2>/dev/null; then
-        warn "Could not load wireguard kernel module — your kernel may be too old (need >= 5.6)"
+        warn "Could not load wireguard kernel module - your kernel may be too old (need >= 5.6)"
     fi
     ok "WireGuard installed"
 }
@@ -253,10 +253,28 @@ ensure_wireguard() {
 # ----------------------------------------------------------------------------
 # wstunnel binary
 # ----------------------------------------------------------------------------
+# Last-resort version when api.github.com is unreachable / rate-limited.
+# Bump occasionally; users can always override with WSTUNNEL_VERSION=vX.Y.Z.
+readonly WSTUNNEL_FALLBACK_VERSION="v10.5.2"
+
 fetch_latest_wstunnel_version() {
-    curl "${CURL_OPTS[@]}" "https://api.github.com/repos/erebe/wstunnel/releases/latest" 2>/dev/null \
-        | grep -m1 '"tag_name":' \
-        | sed -E 's/.*"([^"]+)".*/\1/'
+    # Prints the tag (vX.Y.Z) on stdout, or returns non-zero with a diagnostic
+    # on stderr. Never triggers errexit in the caller - wrap with `|| true`.
+    local response
+    if ! response=$(curl "${CURL_OPTS[@]}" \
+        "https://api.github.com/repos/erebe/wstunnel/releases/latest" 2>&1); then
+        printf '  %s[!]%s GitHub API query failed: %s\n' \
+            "$YELLOW" "$RESET" "$(printf '%s' "$response" | head -1)" >&2
+        return 1
+    fi
+    local tag
+    tag=$(printf '%s\n' "$response" | grep -m1 '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [[ -z "$tag" ]]; then
+        printf '  %s[!]%s GitHub API response did not contain a tag_name (rate limited?)\n' \
+            "$YELLOW" "$RESET" >&2
+        return 1
+    fi
+    printf '%s\n' "$tag"
 }
 
 ensure_wstunnel() {
@@ -267,9 +285,18 @@ ensure_wstunnel() {
 
     info "Installing wstunnel..."
     local version arch tarball url tmpdir
-    info "Querying GitHub for latest wstunnel release"
-    version="${WSTUNNEL_VERSION:-$(fetch_latest_wstunnel_version)}"
-    [[ -z "$version" ]] && die "Could not determine wstunnel version. Set WSTUNNEL_VERSION=vX.Y.Z and retry."
+    if [[ -n "${WSTUNNEL_VERSION:-}" ]]; then
+        version="$WSTUNNEL_VERSION"
+        info "Using pinned wstunnel version: $version"
+    else
+        info "Querying GitHub for latest wstunnel release"
+        version=$(fetch_latest_wstunnel_version || true)
+        if [[ -z "$version" ]]; then
+            warn "Falling back to known-good version $WSTUNNEL_FALLBACK_VERSION"
+            warn "Override with WSTUNNEL_VERSION=vX.Y.Z if you need a different one."
+            version="$WSTUNNEL_FALLBACK_VERSION"
+        fi
+    fi
 
     arch=$(uname -m)
     case "$arch" in
@@ -315,25 +342,25 @@ locate_repo() {
     fi
 
     # Need to clone
-    info "Repository not found locally — cloning"
+    info "Repository not found locally - cloning"
     if ! command -v git >/dev/null 2>&1; then
         $SUDO bash -c "$PKG_INSTALL_CMD git"
     fi
 
     REPO_DIR="$DEFAULT_REPO_DIR"
     if [[ -d "$REPO_DIR" ]]; then
-        warn "Directory $REPO_DIR exists — using as-is"
+        warn "Directory $REPO_DIR exists - using as-is"
         return
     fi
 
     # Prefer gh if authenticated, fall back to https git.
     # GIT_TERMINAL_PROMPT=0 prevents git from blocking on a credential prompt
-    # when the repo is private and no auth is available — fail fast instead.
+    # when the repo is private and no auth is available - fail fast instead.
     if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
         info "Cloning via gh (authenticated)"
         gh repo clone "$GITHUB_REPO" "$REPO_DIR"
     else
-        warn "gh not authenticated — trying HTTPS clone (will fail fast if repo is private)"
+        warn "gh not authenticated - trying HTTPS clone (will fail fast if repo is private)"
         if ! GIT_TERMINAL_PROMPT=0 git clone "$GITHUB_REPO_URL" "$REPO_DIR" 2>&1; then
             die "git clone failed. If the repo is private, either:
     1) Install + auth gh:  ${BOLD}gh auth login${RESET}  and re-run this installer, or
@@ -356,7 +383,7 @@ install_server() {
         info "Creating venv with $PYTHON_BIN"
         $SUDO "$PYTHON_BIN" -m venv "$INSTALL_PREFIX/.venv"
     else
-        ok "venv already exists — reusing"
+        ok "venv already exists - reusing"
     fi
 
     info "Installing Python dependencies (this may take ~30-60s)"
@@ -365,7 +392,7 @@ install_server() {
 
     # Symlink so user can call `warpsocket-server` directly
     $SUDO ln -sf "$INSTALL_PREFIX/.venv/bin/warpsocket-server" "$BIN_LINK"
-    ok "Linked: ${BOLD}${BIN_LINK}${RESET} → ${INSTALL_PREFIX}/.venv/bin/warpsocket-server"
+    ok "Linked: ${BOLD}${BIN_LINK}${RESET} -> ${INSTALL_PREFIX}/.venv/bin/warpsocket-server"
 
     ok "Server installed (version: $(warpsocket-server --version | awk '{print $2}'))"
 }
@@ -395,7 +422,7 @@ ensure_client_system_deps() {
             # gir + libayatana: lets pystray show in GNOME/Cinnamon shells that
             #                   route trays through AppIndicator
             $SUDO bash -c "$PKG_INSTALL_CMD python3-tk gir1.2-ayatanaappindicator3-0.1" \
-                || warn "Some optional GUI deps failed — tray may render but with reduced features"
+                || warn "Some optional GUI deps failed - tray may render but with reduced features"
             ;;
         dnf)
             $SUDO bash -c "$PKG_INSTALL_CMD python3-tkinter libappindicator-gtk3" \
@@ -501,7 +528,7 @@ write_client_sudoers() {
     local tmp
     tmp=$(mktemp)
     cat >"$tmp" <<EOF
-# Managed by WarpSocket installer — do not edit by hand.
+# Managed by WarpSocket installer - do not edit by hand.
 # Lets the tray app (running as $TARGET_USER) invoke the WarpSocket
 # privileged helper without a password prompt. The helper validates inputs.
 $TARGET_USER ALL=(root) NOPASSWD: $CLIENT_HELPER
@@ -509,7 +536,7 @@ EOF
     chmod 0440 "$tmp"
     if ! $SUDO visudo -cf "$tmp" >/dev/null; then
         rm -f "$tmp"
-        die "Generated sudoers file failed validation — aborting"
+        die "Generated sudoers file failed validation - aborting"
     fi
     $SUDO install -m 0440 -o root -g root "$tmp" "$CLIENT_SUDOERS"
     rm -f "$tmp"
@@ -527,7 +554,7 @@ write_client_autostart() {
 [Desktop Entry]
 Type=Application
 Name=WarpSocket
-Comment=WireGuard over WebSocket — tray client
+Comment=WireGuard over WebSocket - tray client
 Exec=$CLIENT_BIN_LINK
 Icon=$icon_path
 Terminal=false
@@ -549,7 +576,7 @@ install_client() {
         info "Creating client venv with $PYTHON_BIN"
         $SUDO "$PYTHON_BIN" -m venv "$CLIENT_PREFIX/.venv"
     else
-        ok "Client venv already exists — reusing"
+        ok "Client venv already exists - reusing"
     fi
 
     info "Installing Python dependencies (this may take ~30-60s)"
@@ -557,7 +584,7 @@ install_client() {
     $SUDO "$CLIENT_PREFIX/.venv/bin/pip" install --disable-pip-version-check -e "$REPO_DIR/client"
 
     $SUDO ln -sf "$CLIENT_PREFIX/.venv/bin/warpsocket" "$CLIENT_BIN_LINK"
-    ok "Linked: ${BOLD}${CLIENT_BIN_LINK}${RESET} → ${CLIENT_PREFIX}/.venv/bin/warpsocket"
+    ok "Linked: ${BOLD}${CLIENT_BIN_LINK}${RESET} -> ${CLIENT_PREFIX}/.venv/bin/warpsocket"
 
     write_client_helper
     write_client_sudoers
@@ -587,8 +614,8 @@ pick_component() {
     if [[ -z "$component" ]]; then
         echo
         echo "${BOLD}Which component do you want to install?${RESET}"
-        echo "  ${BOLD}1)${RESET} Server  — runs wstunnel + WireGuard, accepts client connections"
-        echo "  ${BOLD}2)${RESET} Client  — connects to a WarpSocket server"
+        echo "  ${BOLD}1)${RESET} Server  - runs wstunnel + WireGuard, accepts client connections"
+        echo "  ${BOLD}2)${RESET} Client  - connects to a WarpSocket server"
         echo
         local choice
         while true; do
@@ -596,7 +623,7 @@ pick_component() {
             case "$choice" in
                 1|server) component=server; break ;;
                 2|client) component=client; break ;;
-                *) echo "Invalid choice — pick 1 or 2" ;;
+                *) echo "Invalid choice - pick 1 or 2" ;;
             esac
         done
     fi
