@@ -221,19 +221,26 @@ function Ensure-Wstunnel {
         default { Write-Fail "Unsupported architecture: $($env:PROCESSOR_ARCHITECTURE)" }
     }
 
-    $vnum    = $version.TrimStart('v')
-    $zipName = "wstunnel_${vnum}_windows_${arch}.zip"
-    $url     = "https://github.com/erebe/wstunnel/releases/download/$version/$zipName"
+    $vnum       = $version.TrimStart('v')
+    $tarballName = "wstunnel_${vnum}_windows_${arch}.tar.gz"
+    $url         = "https://github.com/erebe/wstunnel/releases/download/$version/$tarballName"
 
-    $tmpDir  = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
+    $tmpDir     = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
     New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
-    $zipPath = Join-Path $tmpDir $zipName
+    $tarballPath = Join-Path $tmpDir $tarballName
 
     Write-Info "Downloading $url (~5 MB)"
-    Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+    Invoke-WebRequest -Uri $url -OutFile $tarballPath -UseBasicParsing
+
+    # tar.exe is bundled with Windows 10 1803+ / Windows 11. wstunnel only
+    # ships .tar.gz for Windows (no .zip variant).
+    if (-not (Get-Command tar -ErrorAction SilentlyContinue)) {
+        Write-Fail "tar.exe not found. Requires Windows 10 1803+ or Windows 11."
+    }
+    & tar -xzf $tarballPath -C $tmpDir
+    if ($LASTEXITCODE -ne 0) { Write-Fail "Failed to extract $tarballName (tar exit code $LASTEXITCODE)" }
 
     New-Item -ItemType Directory -Path $WARPSOCKET_DIR -Force | Out-Null
-    Expand-Archive -Path $zipPath -DestinationPath $tmpDir -Force
 
     $wstunnelExe = Get-ChildItem -Path $tmpDir -Filter 'wstunnel.exe' -Recurse | Select-Object -First 1
     if (-not $wstunnelExe) { Write-Fail "wstunnel.exe not found in downloaded archive" }
