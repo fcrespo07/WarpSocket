@@ -10,8 +10,17 @@
 #   WARPSOCKET_REPO_DIR=/path/to/clone    Use existing repo instead of cloning
 #   WARPSOCKET_RUN_WIZARD=0               Skip the final `warpsocket-server setup`
 #   WSTUNNEL_VERSION=v10.5.2              Pin a specific wstunnel release
+#   WARPSOCKET_FORCE_IPV4=0               Disable the default IPv4-only mode for apt/curl
+#                                         (default: 1 — many bridged-VM LANs have broken IPv6)
 
 set -euo pipefail
+
+# IPv4-only is the default: bridged VMs frequently get an IPv6 address via SLAAC
+# from a router whose upstream doesn't actually route IPv6 → curl/apt hang for
+# minutes on TCP timeout per mirror. Override with WARPSOCKET_FORCE_IPV4=0.
+FORCE_IPV4="${WARPSOCKET_FORCE_IPV4:-1}"
+CURL_OPTS=(--fail --silent --show-error --location --connect-timeout 10 --max-time 300)
+[[ "$FORCE_IPV4" == "1" ]] && CURL_OPTS+=(-4)
 
 # ----------------------------------------------------------------------------
 # Constants
@@ -20,6 +29,10 @@ readonly GITHUB_REPO="fcrespo07/WarpSocket"
 readonly GITHUB_REPO_URL="https://github.com/${GITHUB_REPO}"
 readonly INSTALL_PREFIX="/opt/warpsocket-server"
 readonly BIN_LINK="/usr/local/bin/warpsocket-server"
+readonly CLIENT_PREFIX="/opt/warpsocket-client"
+readonly CLIENT_BIN_LINK="/usr/local/bin/warpsocket"
+readonly CLIENT_SUDOERS="/etc/sudoers.d/warpsocket"
+readonly CLIENT_HELPER="/usr/local/libexec/warpsocket-priv"
 readonly WSTUNNEL_BIN="/usr/local/bin/wstunnel"
 readonly DEFAULT_REPO_DIR="${HOME:-/root}/WarpSocket"
 
@@ -98,8 +111,10 @@ PKG_UPDATE_CMD=""
 detect_package_manager() {
     if command -v apt-get >/dev/null 2>&1; then
         PKG_MANAGER="apt"
-        PKG_UPDATE_CMD="apt-get update -qq"
-        PKG_INSTALL_CMD="DEBIAN_FRONTEND=noninteractive apt-get install -y -qq"
+        local apt_opts="-o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 -o Acquire::Retries=2"
+        [[ "$FORCE_IPV4" == "1" ]] && apt_opts="$apt_opts -o Acquire::ForceIPv4=true"
+        PKG_UPDATE_CMD="apt-get $apt_opts update -qq"
+        PKG_INSTALL_CMD="DEBIAN_FRONTEND=noninteractive apt-get $apt_opts install -y -qq"
     elif command -v dnf >/dev/null 2>&1; then
         PKG_MANAGER="dnf"
         PKG_UPDATE_CMD="dnf check-update || true"
@@ -148,19 +163,48 @@ find_python() {
     return 1
 }
 
+_add_deadsnakes_apt_source() {
+    # `add-apt-repository -y ppa:deadsnakes/ppa` breaks on Linux Mint because
+    # `lsb_release -cs` returns the Mint codename (vanessa/wilma/…) which has no
+    # corresponding deadsnakes release → either 404 or hours-long retry loop.
+    # We instead read UBUNTU_CODENAME from /etc/os-release and write the apt
+    # source manually, with a signed-by keyring.
+    local ubuntu_codename keyring keyfile
+    # shellcheck disable=SC1091
+    ubuntu_codename=$(. /etc/os-release; echo "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}")
+    [[ -z "$ubuntu_codename" ]] && die "Could not determine Ubuntu base codename for deadsnakes PPA"
+
+    info "Adding deadsnakes PPA (codename: $ubuntu_codename)"
+    $SUDO bash -c "$PKG_INSTALL_CMD ca-certificates curl gnupg"
+
+    keyring="/etc/apt/keyrings/deadsnakes.gpg"
+    keyfile=$(mktemp)
+    # Deadsnakes signing key: F23C5A6CF475977595C89F51BA6932366A755776
+    info "Fetching deadsnakes signing key"
+    curl "${CURL_OPTS[@]}" -o "$keyfile" \
+        "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xF23C5A6CF475977595C89F51BA6932366A755776" \
+        || die "Failed to fetch deadsnakes GPG key"
+    $SUDO mkdir -p /etc/apt/keyrings
+    $SUDO bash -c "gpg --dearmor < '$keyfile' > '$keyring'"
+    rm -f "$keyfile"
+
+    echo "deb [signed-by=$keyring] https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu $ubuntu_codename main" \
+        | $SUDO tee /etc/apt/sources.list.d/deadsnakes.list >/dev/null
+}
+
 install_python() {
     info "Installing Python 3.12 + venv..."
     case "$PKG_MANAGER" in
         apt)
+            info "Refreshing apt index (this can take ~30s)"
             $SUDO bash -c "$PKG_UPDATE_CMD" >/dev/null
             # Try native first
             if $SUDO bash -c "$PKG_INSTALL_CMD python3.12 python3.12-venv" 2>/dev/null; then
                 :
             else
-                # Fallback: deadsnakes PPA (Ubuntu 22.04 / Mint 21.x)
                 warn "python3.12 not in default repos — adding deadsnakes PPA"
-                $SUDO bash -c "$PKG_INSTALL_CMD software-properties-common"
-                $SUDO add-apt-repository -y ppa:deadsnakes/ppa
+                _add_deadsnakes_apt_source
+                info "Refreshing apt index after adding PPA"
                 $SUDO bash -c "$PKG_UPDATE_CMD" >/dev/null
                 $SUDO bash -c "$PKG_INSTALL_CMD python3.12 python3.12-venv"
             fi
@@ -210,7 +254,7 @@ ensure_wireguard() {
 # wstunnel binary
 # ----------------------------------------------------------------------------
 fetch_latest_wstunnel_version() {
-    curl -fsSL "https://api.github.com/repos/erebe/wstunnel/releases/latest" 2>/dev/null \
+    curl "${CURL_OPTS[@]}" "https://api.github.com/repos/erebe/wstunnel/releases/latest" 2>/dev/null \
         | grep -m1 '"tag_name":' \
         | sed -E 's/.*"([^"]+)".*/\1/'
 }
@@ -223,6 +267,7 @@ ensure_wstunnel() {
 
     info "Installing wstunnel..."
     local version arch tarball url tmpdir
+    info "Querying GitHub for latest wstunnel release"
     version="${WSTUNNEL_VERSION:-$(fetch_latest_wstunnel_version)}"
     [[ -z "$version" ]] && die "Could not determine wstunnel version. Set WSTUNNEL_VERSION=vX.Y.Z and retry."
 
@@ -238,8 +283,8 @@ ensure_wstunnel() {
     url="https://github.com/erebe/wstunnel/releases/download/${version}/${tarball}"
 
     tmpdir=$(mktemp -d)
-    info "Downloading $url"
-    curl -fsSL -o "$tmpdir/$tarball" "$url" || die "Download failed: $url"
+    info "Downloading $url (~5 MB)"
+    curl "${CURL_OPTS[@]}" -o "$tmpdir/$tarball" "$url" || die "Download failed: $url"
     tar -xzf "$tmpdir/$tarball" -C "$tmpdir"
     $SUDO install -m 0755 "$tmpdir/wstunnel" "$WSTUNNEL_BIN"
     rm -rf "$tmpdir"
@@ -281,14 +326,19 @@ locate_repo() {
         return
     fi
 
-    # Prefer gh if authenticated, fall back to https git
+    # Prefer gh if authenticated, fall back to https git.
+    # GIT_TERMINAL_PROMPT=0 prevents git from blocking on a credential prompt
+    # when the repo is private and no auth is available — fail fast instead.
     if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+        info "Cloning via gh (authenticated)"
         gh repo clone "$GITHUB_REPO" "$REPO_DIR"
     else
-        warn "gh not authenticated — cloning via HTTPS (will fail if repo is private)"
-        git clone "$GITHUB_REPO_URL" "$REPO_DIR" || die \
-            "git clone failed. If the repo is private, run ${BOLD}gh auth login${RESET} first \
-or set ${BOLD}WARPSOCKET_REPO_DIR=/path/to/already/cloned/repo${RESET}."
+        warn "gh not authenticated — trying HTTPS clone (will fail fast if repo is private)"
+        if ! GIT_TERMINAL_PROMPT=0 git clone "$GITHUB_REPO_URL" "$REPO_DIR" 2>&1; then
+            die "git clone failed. If the repo is private, either:
+    1) Install + auth gh:  ${BOLD}gh auth login${RESET}  and re-run this installer, or
+    2) Clone manually and re-run with: ${BOLD}WARPSOCKET_REPO_DIR=/path/to/clone${RESET}"
+        fi
     fi
     ok "Cloned to: ${BOLD}${REPO_DIR}${RESET}"
 }
@@ -309,9 +359,9 @@ install_server() {
         ok "venv already exists — reusing"
     fi
 
-    info "Installing Python dependencies (this may take ~30s)"
-    $SUDO "$INSTALL_PREFIX/.venv/bin/pip" install --quiet --upgrade pip
-    $SUDO "$INSTALL_PREFIX/.venv/bin/pip" install --quiet -e "$REPO_DIR/server"
+    info "Installing Python dependencies (this may take ~30-60s)"
+    $SUDO "$INSTALL_PREFIX/.venv/bin/pip" install --upgrade --disable-pip-version-check pip
+    $SUDO "$INSTALL_PREFIX/.venv/bin/pip" install --disable-pip-version-check -e "$REPO_DIR/server"
 
     # Symlink so user can call `warpsocket-server` directly
     $SUDO ln -sf "$INSTALL_PREFIX/.venv/bin/warpsocket-server" "$BIN_LINK"
@@ -335,22 +385,198 @@ run_setup_wizard() {
 }
 
 # ----------------------------------------------------------------------------
-# Client install (Linux client not yet supported)
+# Client install
 # ----------------------------------------------------------------------------
+ensure_client_system_deps() {
+    info "Installing client GUI dependencies (tkinter + tray indicator)"
+    case "$PKG_MANAGER" in
+        apt)
+            # python3-tk: tkinter base for customtkinter
+            # gir + libayatana: lets pystray show in GNOME/Cinnamon shells that
+            #                   route trays through AppIndicator
+            $SUDO bash -c "$PKG_INSTALL_CMD python3-tk gir1.2-ayatanaappindicator3-0.1" \
+                || warn "Some optional GUI deps failed — tray may render but with reduced features"
+            ;;
+        dnf)
+            $SUDO bash -c "$PKG_INSTALL_CMD python3-tkinter libappindicator-gtk3" \
+                || warn "Some optional GUI deps failed"
+            ;;
+        pacman)
+            $SUDO bash -c "$PKG_INSTALL_CMD tk libappindicator-gtk3" \
+                || warn "Some optional GUI deps failed"
+            ;;
+    esac
+}
+
+# Resolve the desktop user the tray will run as. When this script is invoked
+# via `sudo`, $SUDO_USER points to the real user; otherwise we ask.
+TARGET_USER=""
+TARGET_HOME=""
+resolve_target_user() {
+    if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
+        TARGET_USER="$SUDO_USER"
+    elif [[ -n "${WARPSOCKET_USER:-}" ]]; then
+        TARGET_USER="$WARPSOCKET_USER"
+    else
+        echo
+        TARGET_USER=$(ask "Desktop user that will run the tray app" "${USER:-}")
+    fi
+    [[ -z "$TARGET_USER" ]] && die "No target user specified"
+    id "$TARGET_USER" >/dev/null 2>&1 || die "User '$TARGET_USER' does not exist"
+    TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
+    [[ -d "$TARGET_HOME" ]] || die "Home directory of '$TARGET_USER' not found ($TARGET_HOME)"
+    ok "Tray will run as: ${BOLD}${TARGET_USER}${RESET} (home: ${TARGET_HOME})"
+}
+
+write_client_helper() {
+    # All privileged tunnel ops are funnelled through this helper. It validates
+    # its inputs (interface name, IP) so a malicious caller can't escape the
+    # whitelisted operation set even though the sudoers rule grants it root.
+    info "Installing privileged helper at ${CLIENT_HELPER}"
+    $SUDO install -d -m 0755 "$(dirname "$CLIENT_HELPER")"
+
+    local tmp
+    tmp=$(mktemp)
+    cat >"$tmp" <<'HELPER_EOF'
+#!/usr/bin/env bash
+# WarpSocket privileged helper. Installed by the WarpSocket installer.
+# Invoked via `sudo -n` by the user-mode tray app. Single sudoers entry
+# whitelists this script for the desktop user.
+set -euo pipefail
+
+WG_CONF_DIR="/etc/wireguard"
+NAME_RE='^[A-Za-z0-9_=+.-]{1,15}$'
+IPV4_RE='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+
+die() { echo "warpsocket-priv: $*" >&2; exit 2; }
+need_name() { [[ "${1:-}" =~ $NAME_RE ]] || die "invalid tunnel name: ${1:-<empty>}"; }
+need_ipv4() { [[ "${1:-}" =~ $IPV4_RE ]] || die "invalid IPv4: ${1:-<empty>}"; }
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+    up)
+        name="${1:-}"; need_name "$name"
+        umask 077
+        mkdir -p -m 0700 "$WG_CONF_DIR"
+        conf="$WG_CONF_DIR/$name.conf"
+        # Read conf body from stdin so the unprivileged caller never has to
+        # write the WG private key to a user-readable temp file.
+        cat > "$conf"
+        chmod 0600 "$conf"
+        wg-quick down "$name" >/dev/null 2>&1 || true
+        exec wg-quick up "$name"
+        ;;
+    down)
+        name="${1:-}"; need_name "$name"
+        wg-quick down "$name" >/dev/null 2>&1 || true
+        rm -f "$WG_CONF_DIR/$name.conf"
+        ;;
+    is-active)
+        name="${1:-}"; need_name "$name"
+        wg show "$name" >/dev/null 2>&1
+        ;;
+    route-add)
+        ip="${1:-}"; gw="${2:-}"
+        need_ipv4 "$ip"; need_ipv4 "$gw"
+        ip route add "$ip/32" via "$gw"
+        ;;
+    route-del)
+        ip="${1:-}"; need_ipv4 "$ip"
+        ip route del "$ip/32" >/dev/null 2>&1 || true
+        ;;
+    *) die "unknown command: ${cmd:-<empty>}" ;;
+esac
+HELPER_EOF
+    $SUDO install -m 0755 -o root -g root "$tmp" "$CLIENT_HELPER"
+    rm -f "$tmp"
+    ok "Helper installed: ${BOLD}${CLIENT_HELPER}${RESET}"
+}
+
+write_client_sudoers() {
+    # Single entry: whitelist the helper. The helper itself enforces input
+    # validation, so this is the entire blast radius granted to $TARGET_USER.
+    info "Writing sudoers rule to ${CLIENT_SUDOERS}"
+    local tmp
+    tmp=$(mktemp)
+    cat >"$tmp" <<EOF
+# Managed by WarpSocket installer — do not edit by hand.
+# Lets the tray app (running as $TARGET_USER) invoke the WarpSocket
+# privileged helper without a password prompt. The helper validates inputs.
+$TARGET_USER ALL=(root) NOPASSWD: $CLIENT_HELPER
+EOF
+    chmod 0440 "$tmp"
+    if ! $SUDO visudo -cf "$tmp" >/dev/null; then
+        rm -f "$tmp"
+        die "Generated sudoers file failed validation — aborting"
+    fi
+    $SUDO install -m 0440 -o root -g root "$tmp" "$CLIENT_SUDOERS"
+    rm -f "$tmp"
+    ok "sudoers rule installed"
+}
+
+write_client_autostart() {
+    local autostart_dir="$TARGET_HOME/.config/autostart"
+    local desktop_file="$autostart_dir/warpsocket.desktop"
+    local icon_path="$REPO_DIR/client/warpsocket/resources/app_icon.png"
+
+    info "Creating autostart entry: $desktop_file"
+    $SUDO -u "$TARGET_USER" mkdir -p "$autostart_dir"
+    $SUDO -u "$TARGET_USER" tee "$desktop_file" >/dev/null <<EOF
+[Desktop Entry]
+Type=Application
+Name=WarpSocket
+Comment=WireGuard over WebSocket — tray client
+Exec=$CLIENT_BIN_LINK
+Icon=$icon_path
+Terminal=false
+X-GNOME-Autostart-enabled=true
+Categories=Network;
+EOF
+    ok "Autostart entry installed (will launch at next login)"
+}
+
 install_client() {
+    info "Installing WarpSocket client to ${BOLD}${CLIENT_PREFIX}${RESET}"
+    [[ -d "$REPO_DIR/client" ]] || die "Client source not found at $REPO_DIR/client"
+
+    resolve_target_user
+    ensure_client_system_deps
+
+    $SUDO mkdir -p "$CLIENT_PREFIX"
+    if [[ ! -d "$CLIENT_PREFIX/.venv" ]]; then
+        info "Creating client venv with $PYTHON_BIN"
+        $SUDO "$PYTHON_BIN" -m venv "$CLIENT_PREFIX/.venv"
+    else
+        ok "Client venv already exists — reusing"
+    fi
+
+    info "Installing Python dependencies (this may take ~30-60s)"
+    $SUDO "$CLIENT_PREFIX/.venv/bin/pip" install --upgrade --disable-pip-version-check pip
+    $SUDO "$CLIENT_PREFIX/.venv/bin/pip" install --disable-pip-version-check -e "$REPO_DIR/client"
+
+    $SUDO ln -sf "$CLIENT_PREFIX/.venv/bin/warpsocket" "$CLIENT_BIN_LINK"
+    ok "Linked: ${BOLD}${CLIENT_BIN_LINK}${RESET} → ${CLIENT_PREFIX}/.venv/bin/warpsocket"
+
+    write_client_helper
+    write_client_sudoers
+    write_client_autostart
+
     cat <<EOF
 
-${YELLOW}${BOLD}⚠ Linux client not yet implemented${RESET}
+${BOLD}${GREEN}Client installed.${RESET}
 
-The Windows client is fully working. Linux/macOS clients are next on the roadmap.
-The platform abstraction layer (LinuxPlatform in client/warpsocket/platforms/linux.py)
-is currently a stub.
+  ${BOLD}Next steps:${RESET}
+    1. Drop your ${BOLD}.warpcfg${RESET} file somewhere accessible by ${TARGET_USER}.
+    2. Launch ${BOLD}warpsocket${RESET} (or log out/in to trigger autostart).
+    3. The first run prompts for the .warpcfg via the import wizard.
 
-For now, only the ${BOLD}server${RESET} component is available on Linux.
-Re-run this script and choose the server, or install on a Windows machine.
+  ${DIM}Autostart entry: $TARGET_HOME/.config/autostart/warpsocket.desktop${RESET}
+  ${DIM}Privileged helper: $CLIENT_HELPER${RESET}
+  ${DIM}Sudoers rule: $CLIENT_SUDOERS  (revoke with: sudo rm $CLIENT_SUDOERS)${RESET}
 
 EOF
-    exit 0
 }
 
 # ----------------------------------------------------------------------------
@@ -391,18 +617,13 @@ main() {
     detect_distro
     detect_package_manager
 
-    info "Component selection"
-    local will_install_server=1
-    if [[ "${WARPSOCKET_COMPONENT:-server}" == "client" ]]; then
-        will_install_server=0
-    fi
-
-    if [[ "$will_install_server" -eq 1 ]]; then
-        info "Preparing system dependencies"
-        ensure_python
-        ensure_wireguard
-        ensure_wstunnel
-    fi
+    # Both server and client need: Python 3.11+, wireguard-tools, wstunnel.
+    # GUI-only client deps (tkinter, appindicator) are installed inside
+    # install_client to keep the server install minimal.
+    info "Preparing system dependencies"
+    ensure_python
+    ensure_wireguard
+    ensure_wstunnel
 
     locate_repo
     pick_component
