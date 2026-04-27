@@ -43,6 +43,27 @@ def test_no_command_raises() -> None:
         main([])
 
 
+class TestRequireRoot:
+    def test_require_root_called_for_privileged_command(self) -> None:
+        # When --config-dir is omitted, main() should invoke _require_root.
+        # We patch _require_root to assert it's called and to short-circuit
+        # before the real handler tries to read /etc paths.
+        with patch("warpsocket_server.cli._require_root") as mock_req:
+            mock_req.side_effect = SystemExit(1)
+            with pytest.raises(SystemExit):
+                main(["status"])
+            mock_req.assert_called_once_with("status")
+
+    def test_require_root_skipped_with_config_dir(self, tmp_path: Path) -> None:
+        # Tests pass --config-dir and should NOT trip the root check.
+        config_dir = _write_server_config(tmp_path)
+        with patch("warpsocket_server.cli._require_root") as mock_req:
+            with patch("warpsocket_server.platforms.get_server_platform") as mock_platform:
+                mock_platform.return_value = MagicMock()
+                main(["--config-dir", str(config_dir), "status"])
+            mock_req.assert_not_called()
+
+
 def test_parser_has_config_dir_option() -> None:
     parser = build_parser()
     args = parser.parse_args(["--config-dir", "/tmp/ws", "status"])

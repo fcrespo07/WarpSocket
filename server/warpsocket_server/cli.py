@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -29,6 +30,38 @@ from warpsocket_server.wireguard import (
 
 log = logging.getLogger(__name__)
 console = Console()
+
+
+# Commands that read/modify privileged state (systemd, /etc/wireguard, wg interface).
+# Anything not in this set runs without a root check (--version, --help).
+_PRIVILEGED_COMMANDS = frozenset({
+    "setup", "add-client", "list-clients", "revoke-client",
+    "status", "restart", "uninstall",
+})
+
+
+def _require_root(command: str) -> None:
+    """Exit with a friendly error if the current user can't run privileged ops."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            if ctypes.windll.shell32.IsUserAnAdmin() != 0:
+                return
+        except Exception:
+            return
+        console.print(
+            "[red]Error:[/red] This command must be run as Administrator.\n"
+            f"  Open an elevated PowerShell and run: [bold]warpsocket-server {command}[/bold]"
+        )
+        raise SystemExit(1)
+
+    if os.geteuid() == 0:
+        return
+    console.print(
+        f"[red]Error:[/red] This command must be run as root.\n"
+        f"  Try: [bold]sudo warpsocket-server {command}[/bold]"
+    )
+    raise SystemExit(1)
 
 
 def _resolve_config_path(args: argparse.Namespace) -> Path:
@@ -431,4 +464,9 @@ def main(argv: list[str] | None = None) -> int:
     if handler is None:
         parser.print_help()
         return 1
+    if args.command in _PRIVILEGED_COMMANDS:
+        # Skip the root check when --config-dir points to a writable location
+        # (used by tests). Real installations always use the default /etc path.
+        if not args.config_dir:
+            _require_root(args.command)
     return handler(args)
