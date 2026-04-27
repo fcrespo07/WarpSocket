@@ -120,15 +120,18 @@ def _show_log_window(memory_handler: object, root: object) -> None:
             pass
         _log_window.pop("win", None)
 
-    # Ensure the hidden root is fully initialised before spawning a child window.
-    # On some Windows/customtkinter versions, CTkToplevel silently fails to appear
-    # if the root hasn't processed its first idle tasks.
+    # CTkToplevel on Windows inherits the hidden state of a withdrawn parent.
+    # Briefly deiconify root so the child window can appear, then hide root again.
+    root.deiconify()
     root.update_idletasks()
 
     win = ctk.CTkToplevel(root)
     _log_window["win"] = win
     win.title("WarpSocket — Logs")
     win.geometry("700x420")
+
+    root.withdraw()
+
     try:
         win.deiconify()
         win.lift()
