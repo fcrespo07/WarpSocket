@@ -95,7 +95,8 @@ class TestListClients:
         ret = main(["--config-dir", str(config_dir), "list-clients"])
         assert ret == 0
 
-    def test_list_with_clients(self, tmp_path: Path) -> None:
+    @patch("warpsocket_server.cli.get_live_peers", return_value={})
+    def test_list_with_clients(self, _mock_live: MagicMock, tmp_path: Path) -> None:
         clients = [
             {"name": "laptop", "public_key": "key1", "address": "10.0.0.2/32"},
             {"name": "phone", "public_key": "key2", "address": "10.0.0.3/32"},
@@ -103,6 +104,66 @@ class TestListClients:
         config_dir = _write_server_config(tmp_path, clients=clients)
         ret = main(["--config-dir", str(config_dir), "list-clients"])
         assert ret == 0
+
+    @patch("warpsocket_server.cli.get_live_peers")
+    def test_list_shows_online_status(
+        self, mock_live: MagicMock, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import time
+
+        from warpsocket_server.wireguard import LivePeer
+
+        clients = [{"name": "laptop", "public_key": "key1", "address": "10.0.0.2/32"}]
+        config_dir = _write_server_config(tmp_path, clients=clients)
+        mock_live.return_value = {
+            "key1": LivePeer(
+                public_key="key1",
+                endpoint="192.168.1.50:54321",
+                allowed_ips="10.0.0.2/32",
+                latest_handshake=int(time.time()) - 30,  # 30s ago = online
+                transfer_rx=2048,
+                transfer_tx=1024,
+            )
+        }
+        ret = main(["--config-dir", str(config_dir), "list-clients"])
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "online" in out
+        assert "laptop" in out
+
+    @patch("warpsocket_server.cli.get_live_peers")
+    def test_list_shows_offline_when_handshake_stale(
+        self, mock_live: MagicMock, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import time
+
+        from warpsocket_server.wireguard import LivePeer
+
+        clients = [{"name": "laptop", "public_key": "key1", "address": "10.0.0.2/32"}]
+        config_dir = _write_server_config(tmp_path, clients=clients)
+        mock_live.return_value = {
+            "key1": LivePeer(
+                public_key="key1",
+                endpoint="192.168.1.50:54321",
+                allowed_ips="10.0.0.2/32",
+                latest_handshake=int(time.time()) - 600,  # 10 min ago = offline
+                transfer_rx=0,
+                transfer_tx=0,
+            )
+        }
+        ret = main(["--config-dir", str(config_dir), "list-clients"])
+        assert ret == 0
+        assert "offline" in capsys.readouterr().out
+
+    @patch("warpsocket_server.cli.get_live_peers", return_value={})
+    def test_list_shows_unknown_when_wg_down(
+        self, _mock_live: MagicMock, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        clients = [{"name": "laptop", "public_key": "key1", "address": "10.0.0.2/32"}]
+        config_dir = _write_server_config(tmp_path, clients=clients)
+        ret = main(["--config-dir", str(config_dir), "list-clients"])
+        assert ret == 0
+        assert "unknown" in capsys.readouterr().out
 
 
 class TestStatus:

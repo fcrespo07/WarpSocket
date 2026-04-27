@@ -40,9 +40,10 @@ After running the server installer, the following commands are available:
 |---|---|
 | `warpsocket-server setup` | Interactive setup wizard |
 | `warpsocket-server add-client <name>` | Generate a `.warpcfg` file for a new client |
-| `warpsocket-server list-clients` | List registered clients |
+| `warpsocket-server list-clients` | List registered clients with their live status (online/offline, last handshake, transfer) |
 | `warpsocket-server revoke-client <name>` | Remove a client |
 | `warpsocket-server status` | Show service status |
+| `warpsocket-server restart` | Regenerate config and fully restart wg-quick + wstunnel |
 | `warpsocket-server uninstall` | Remove WarpSocket server completely |
 
 ---

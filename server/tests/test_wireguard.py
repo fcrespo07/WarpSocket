@@ -11,6 +11,7 @@ from warpsocket_server.wireguard import (
     WireGuardError,
     add_peer_live,
     build_server_wg_conf,
+    get_live_peers,
     remove_peer_live,
 )
 
@@ -74,6 +75,47 @@ class TestAddPeerLive:
             mock_run.side_effect = subprocess.CalledProcessError(1, "wg", stderr="fail")
             with pytest.raises(WireGuardError, match="Failed to add peer"):
                 add_peer_live("pubkey", "10.0.0.5/32")
+
+
+class TestGetLivePeers:
+    # `wg show <iface> dump` format: tab-separated; first line is the interface,
+    # subsequent lines are peers. Real example fields per peer:
+    # public_key  preshared_key  endpoint  allowed_ips  latest_handshake  rx  tx  keepalive
+    _DUMP_OUTPUT = (
+        "server_priv\tserver_pub\t51820\toff\n"
+        "peer1pubkey\t(none)\t192.168.1.50:54321\t10.0.0.2/32\t1714220000\t1024\t2048\t25\n"
+        "peer2pubkey\t(none)\t(none)\t10.0.0.3/32\t0\t0\t0\toff\n"
+    )
+
+    def test_parses_two_peers(self) -> None:
+        with patch("warpsocket_server.wireguard.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = self._DUMP_OUTPUT
+            peers = get_live_peers()
+        assert set(peers.keys()) == {"peer1pubkey", "peer2pubkey"}
+
+        active = peers["peer1pubkey"]
+        assert active.endpoint == "192.168.1.50:54321"
+        assert active.latest_handshake == 1714220000
+        assert active.transfer_rx == 1024
+        assert active.transfer_tx == 2048
+        assert active.allowed_ips == "10.0.0.2/32"
+
+        idle = peers["peer2pubkey"]
+        assert idle.endpoint is None
+        assert idle.latest_handshake is None
+        assert idle.transfer_rx == 0
+
+    def test_returns_empty_when_wg_fails(self) -> None:
+        with patch("warpsocket_server.wireguard.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stdout = ""
+            assert get_live_peers() == {}
+
+    def test_returns_empty_when_wg_not_installed(self) -> None:
+        with patch("warpsocket_server.wireguard.subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError("wg")
+            assert get_live_peers() == {}
 
 
 class TestRemovePeerLive:

@@ -20,7 +20,12 @@ from warpsocket_server.config import (
 from warpsocket_server.crypto import generate_wg_keypair
 from warpsocket_server.ip_pool import PoolExhaustedError, next_available_ip
 from warpsocket_server.warpcfg import build_warpcfg, write_warpcfg
-from warpsocket_server.wireguard import add_peer_live, build_server_wg_conf, remove_peer_live
+from warpsocket_server.wireguard import (
+    add_peer_live,
+    build_server_wg_conf,
+    get_live_peers,
+    remove_peer_live,
+)
 
 log = logging.getLogger(__name__)
 console = Console()
@@ -112,20 +117,77 @@ def _cmd_add_client(args: argparse.Namespace) -> int:
     return 0
 
 
+def _format_bytes(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    units = ["KB", "MB", "GB", "TB"]
+    f = float(n)
+    for u in units:
+        f /= 1024
+        if f < 1024:
+            return f"{f:.1f} {u}"
+    return f"{f:.1f} PB"
+
+
+def _format_seconds_ago(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds}s ago"
+    if seconds < 3600:
+        return f"{seconds // 60}m {seconds % 60}s ago"
+    if seconds < 86400:
+        return f"{seconds // 3600}h {(seconds % 3600) // 60}m ago"
+    return f"{seconds // 86400}d {(seconds % 86400) // 3600}h ago"
+
+
+# A peer is considered "online" if its last handshake is within this window.
+# WireGuard renews handshakes roughly every 2 minutes; 3 minutes leaves margin.
+_ONLINE_WINDOW_SECONDS = 180
+
+
 def _cmd_list_clients(args: argparse.Namespace) -> int:
+    import time
+
     config = _load_config(args)
 
     if not config.clients:
         console.print("No clients registered. Use [bold]add-client[/bold] to add one.")
         return 0
 
+    live_peers = get_live_peers()
+    now = int(time.time())
+
     table = Table(title="Registered Clients")
     table.add_column("Name", style="bold")
     table.add_column("Address")
-    table.add_column("Public Key")
+    table.add_column("Status")
+    table.add_column("Last handshake")
+    table.add_column("Endpoint")
+    table.add_column("RX / TX")
 
     for c in config.clients:
-        table.add_row(c.name, c.address, c.public_key[:24] + "...")
+        live = live_peers.get(c.public_key)
+        if live is None:
+            # Peer not even known to running WG (interface down, or peer not synced)
+            status = "[dim]unknown[/dim]"
+            handshake = "[dim]—[/dim]"
+            endpoint = "[dim]—[/dim]"
+            transfer = "[dim]—[/dim]"
+        elif live.latest_handshake is None:
+            status = "[yellow]idle[/yellow]"
+            handshake = "[dim]never[/dim]"
+            endpoint = "[dim]—[/dim]"
+            transfer = "0 B / 0 B"
+        else:
+            seconds_ago = now - live.latest_handshake
+            if seconds_ago < _ONLINE_WINDOW_SECONDS:
+                status = "[green]online[/green]"
+            else:
+                status = "[yellow]offline[/yellow]"
+            handshake = _format_seconds_ago(seconds_ago)
+            endpoint = live.endpoint or "[dim]—[/dim]"
+            transfer = f"{_format_bytes(live.transfer_rx)} / {_format_bytes(live.transfer_tx)}"
+
+        table.add_row(c.name, c.address, status, handshake, endpoint, transfer)
 
     console.print(table)
     return 0

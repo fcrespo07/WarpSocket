@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from warpsocket_server.config import ServerConfig
@@ -11,6 +12,60 @@ log = logging.getLogger(__name__)
 
 class WireGuardError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class LivePeer:
+    """Snapshot of a peer's runtime state from `wg show <iface> dump`."""
+    public_key: str
+    endpoint: str | None
+    allowed_ips: str
+    latest_handshake: int | None  # unix timestamp; None if never
+    transfer_rx: int  # bytes received from peer
+    transfer_tx: int  # bytes sent to peer
+
+
+def get_live_peers(interface: str = "wg0", wg_bin: Path | None = None) -> dict[str, LivePeer]:
+    """Return public_key -> LivePeer for every peer on the running interface.
+
+    Returns an empty dict if the interface is down or `wg` fails — callers
+    should treat absence of data as "no live state available", not as error.
+    """
+    wg = str(wg_bin or "wg")
+    try:
+        result = subprocess.run(
+            [wg, "show", interface, "dump"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {}
+    if result.returncode != 0:
+        return {}
+
+    peers: dict[str, LivePeer] = {}
+    lines = result.stdout.strip().split("\n")
+    # First line is the interface itself (private_key, public_key, listen_port, fwmark);
+    # subsequent lines are peers.
+    for line in lines[1:]:
+        parts = line.split("\t")
+        if len(parts) < 8:
+            continue
+        public_key, _preshared, endpoint, allowed_ips, handshake, rx, tx, _keepalive = parts[:8]
+        try:
+            handshake_int = int(handshake)
+        except ValueError:
+            handshake_int = 0
+        peers[public_key] = LivePeer(
+            public_key=public_key,
+            endpoint=endpoint if endpoint and endpoint != "(none)" else None,
+            allowed_ips=allowed_ips,
+            latest_handshake=handshake_int if handshake_int > 0 else None,
+            transfer_rx=int(rx) if rx.isdigit() else 0,
+            transfer_tx=int(tx) if tx.isdigit() else 0,
+        )
+    return peers
 
 
 def build_server_wg_conf(config: ServerConfig) -> str:
