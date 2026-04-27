@@ -129,5 +129,12 @@ class LinuxServerPlatform(ServerPlatform):
     def is_wg_active(self, interface: str = "wg0") -> bool:
         return Path(f"/sys/class/net/{interface}").exists()
 
+    def uninstall_wg_config(self, interface: str = "wg0") -> None:
+        unit = f"wg-quick@{interface}.service"
+        _run(["systemctl", "disable", "--now", unit], check=False)
+        conf_path = self.wg_config_dir() / f"{interface}.conf"
+        if conf_path.exists():
+            conf_path.unlink()
+
     def wg_config_dir(self) -> Path:
         return Path("/etc/wireguard")

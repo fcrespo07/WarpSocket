@@ -48,5 +48,9 @@ class ServerPlatform(ABC):
         ...
 
     @abstractmethod
+    def uninstall_wg_config(self, interface: str = "wg0") -> None:
+        ...
+
+    @abstractmethod
     def wg_config_dir(self) -> Path:
         ...

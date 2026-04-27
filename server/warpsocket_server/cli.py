@@ -160,6 +160,63 @@ def _cmd_revoke_client(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_uninstall(args: argparse.Namespace) -> int:
+    from warpsocket_server.platforms import PlatformError, get_server_platform
+
+    config_path = _resolve_config_path(args)
+    config_dir = config_path.parent
+
+    console.print("[bold red]WARNING:[/bold red] This will permanently remove WarpSocket server.")
+    console.print("  - wstunnel systemd service")
+    console.print("  - WireGuard interface and config (wg0)")
+    console.print(f"  - Server config directory: {config_dir}")
+
+    if not args.yes:
+        answer = console.input("\nType [bold]yes[/bold] to confirm: ")
+        if answer.strip().lower() != "yes":
+            console.print("Aborted.")
+            return 1
+
+    platform = get_server_platform()
+    errors: list[str] = []
+
+    console.print("\nRemoving wstunnel service...", end=" ")
+    try:
+        platform.uninstall_wstunnel_service()
+        console.print("[green]done[/green]")
+    except PlatformError as exc:
+        console.print(f"[yellow]warning:[/yellow] {exc}")
+        errors.append(str(exc))
+
+    console.print("Removing WireGuard config...", end=" ")
+    try:
+        platform.uninstall_wg_config()
+        console.print("[green]done[/green]")
+    except PlatformError as exc:
+        console.print(f"[yellow]warning:[/yellow] {exc}")
+        errors.append(str(exc))
+
+    console.print(f"Removing config directory {config_dir}...", end=" ")
+    import shutil
+    try:
+        if config_dir.exists():
+            shutil.rmtree(config_dir)
+        console.print("[green]done[/green]")
+    except OSError as exc:
+        console.print(f"[yellow]warning:[/yellow] {exc}")
+        errors.append(str(exc))
+
+    if errors:
+        console.print(
+            "\n[yellow]Uninstall completed with warnings.[/yellow] "
+            "Some steps may require manual cleanup."
+        )
+        return 1
+
+    console.print("\n[green]WarpSocket server uninstalled successfully.[/green]")
+    return 0
+
+
 def _cmd_status(args: argparse.Namespace) -> int:
     from warpsocket_server.platforms import PlatformError, get_server_platform
 
@@ -234,6 +291,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="Show server status")
 
+    p_uninstall = sub.add_parser("uninstall", help="Remove WarpSocket server completely")
+    p_uninstall.add_argument(
+        "--yes", "-y", action="store_true", help="Skip confirmation prompt"
+    )
+
     return parser
 
 
@@ -243,6 +305,7 @@ _COMMANDS: dict[str, callable] = {
     "list-clients": _cmd_list_clients,
     "revoke-client": _cmd_revoke_client,
     "status": _cmd_status,
+    "uninstall": _cmd_uninstall,
 }
 
 

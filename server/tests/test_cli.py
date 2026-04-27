@@ -131,6 +131,57 @@ class TestStatus:
         assert ret == 0
 
 
+class TestUninstall:
+    @patch("warpsocket_server.platforms.get_server_platform")
+    def test_uninstall_with_yes_flag(self, mock_platform: MagicMock, tmp_path: Path) -> None:
+        config_dir = _write_server_config(tmp_path)
+        fake = MagicMock()
+        mock_platform.return_value = fake
+        ret = main(["--config-dir", str(config_dir), "uninstall", "--yes"])
+        assert ret == 0
+        fake.uninstall_wstunnel_service.assert_called_once()
+        fake.uninstall_wg_config.assert_called_once()
+        assert not config_dir.exists()
+
+    @patch("warpsocket_server.cli.console")
+    @patch("warpsocket_server.platforms.get_server_platform")
+    def test_uninstall_aborts_without_confirmation(
+        self, mock_platform: MagicMock, mock_console: MagicMock, tmp_path: Path
+    ) -> None:
+        config_dir = _write_server_config(tmp_path)
+        mock_console.input.return_value = "no"
+        ret = main(["--config-dir", str(config_dir), "uninstall"])
+        assert ret == 1
+        mock_platform.return_value.uninstall_wstunnel_service.assert_not_called()
+
+    @patch("warpsocket_server.cli.console")
+    @patch("warpsocket_server.platforms.get_server_platform")
+    def test_uninstall_confirms_with_yes(
+        self, mock_platform: MagicMock, mock_console: MagicMock, tmp_path: Path
+    ) -> None:
+        config_dir = _write_server_config(tmp_path)
+        mock_console.input.return_value = "yes"
+        mock_console.print = MagicMock()
+        fake = MagicMock()
+        mock_platform.return_value = fake
+        ret = main(["--config-dir", str(config_dir), "uninstall"])
+        assert ret == 0
+        fake.uninstall_wstunnel_service.assert_called_once()
+
+    @patch("warpsocket_server.platforms.get_server_platform")
+    def test_uninstall_returns_1_on_platform_error(
+        self, mock_platform: MagicMock, tmp_path: Path
+    ) -> None:
+        from warpsocket_server.platforms.base import PlatformError
+
+        config_dir = _write_server_config(tmp_path)
+        fake = MagicMock()
+        fake.uninstall_wstunnel_service.side_effect = PlatformError("service not found")
+        mock_platform.return_value = fake
+        ret = main(["--config-dir", str(config_dir), "uninstall", "--yes"])
+        assert ret == 1
+
+
 class TestRevokeClient:
     @patch("warpsocket_server.cli.remove_peer_live")
     def test_revoke_removes_client(self, mock_remove: MagicMock, tmp_path: Path) -> None:

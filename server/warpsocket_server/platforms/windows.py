@@ -35,5 +35,8 @@ class WindowsServerPlatform(ServerPlatform):
     def is_wg_active(self, interface: str = "wg0") -> bool:
         raise PlatformError("Windows server support not implemented yet")
 
+    def uninstall_wg_config(self, interface: str = "wg0") -> None:
+        raise PlatformError("Windows server support not implemented yet")
+
     def wg_config_dir(self) -> Path:
         return Path(r"C:\ProgramData\WireGuard")

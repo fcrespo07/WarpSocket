@@ -93,6 +93,39 @@ class TestLinuxPlatform:
                     )
 
 
+    @patch("warpsocket_server.platforms.linux._run")
+    def test_uninstall_wg_config_disables_unit_and_removes_file(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        conf = tmp_path / "wg0.conf"
+        conf.write_text("[Interface]\n")
+        with patch.object(LinuxServerPlatform, "wg_config_dir", return_value=tmp_path):
+            LinuxServerPlatform().uninstall_wg_config()
+        cmds = [call.args[0] for call in mock_run.call_args_list]
+        assert any("disable" in c for c in cmds)
+        assert not conf.exists()
+
+    @patch("warpsocket_server.platforms.linux._run")
+    def test_restart_wstunnel_service(self, mock_run: MagicMock) -> None:
+        LinuxServerPlatform().restart_wstunnel_service()
+        cmds = [call.args[0] for call in mock_run.call_args_list]
+        assert ["systemctl", "restart", "wstunnel-warpsocket.service"] in cmds
+
+    @patch("warpsocket_server.platforms.linux._run")
+    def test_restart_wstunnel_raises_on_failure(self, mock_run: MagicMock) -> None:
+        mock_run.side_effect = subprocess.CalledProcessError(1, "systemctl", stderr="fail")
+        with pytest.raises(PlatformError, match="Failed to restart"):
+            LinuxServerPlatform().restart_wstunnel_service()
+
+    @patch("warpsocket_server.platforms.linux._run")
+    def test_uninstall_wstunnel_service(self, mock_run: MagicMock) -> None:
+        with patch("warpsocket_server.platforms.linux._SERVICE_PATH") as mock_path:
+            mock_path.exists.return_value = True
+            LinuxServerPlatform().uninstall_wstunnel_service()
+        cmds = [call.args[0] for call in mock_run.call_args_list]
+        assert any("disable" in c for c in cmds)
+
+
 class TestStubPlatforms:
     def test_macos_raises_not_implemented(self) -> None:
         from warpsocket_server.platforms.macos import MacOSServerPlatform
