@@ -15,11 +15,21 @@ class WireGuardError(RuntimeError):
 
 def build_server_wg_conf(config: ServerConfig) -> str:
     """Build the server-side wg0.conf content."""
+    subnet = config.subnet
     lines = [
         "[Interface]",
         f"PrivateKey = {config.wg_private_key}",
         f"Address = {config.server_address}",
         f"ListenPort = {config.wg_listen_port}",
+        # Enable IP forwarding and NAT so connected clients can reach the internet.
+        # %i is replaced by wg-quick with the interface name (e.g. wg0).
+        f"PostUp = sysctl -w net.ipv4.ip_forward=1; "
+        f"iptables -A FORWARD -i %i -j ACCEPT; "
+        f"iptables -A FORWARD -o %i -j ACCEPT; "
+        f"iptables -t nat -A POSTROUTING -s {subnet} -j MASQUERADE",
+        f"PostDown = iptables -D FORWARD -i %i -j ACCEPT; "
+        f"iptables -D FORWARD -o %i -j ACCEPT; "
+        f"iptables -t nat -D POSTROUTING -s {subnet} -j MASQUERADE",
     ]
 
     for client in config.clients:

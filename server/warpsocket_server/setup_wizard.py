@@ -156,6 +156,11 @@ def run_setup(config_dir: Path) -> int:
     config.save(config_path)
     console.print(f"  [green]✓[/green] Server config saved to {config_path}")
 
+    # Enable IP forwarding persistently (survives reboots).
+    # PostUp in wg0.conf handles the runtime activation; this covers the
+    # window between boot and wg-quick bringing the interface up.
+    _enable_ip_forwarding(config_dir)
+
     # Install services via platform
     platform = get_server_platform()
     console.print("\n[bold]Installing services...[/bold]")
@@ -208,6 +213,20 @@ def run_setup(config_dir: Path) -> int:
         )
     )
     return 0
+
+
+def _enable_ip_forwarding(config_dir: Path) -> None:
+    """Write a sysctl drop-in so ip_forward survives reboots (Linux only)."""
+    if sys.platform != "linux":
+        return
+    sysctl_path = Path("/etc/sysctl.d/99-warpsocket.conf")
+    try:
+        sysctl_path.write_text("net.ipv4.ip_forward = 1\n", encoding="utf-8")
+        import subprocess as _sp
+        _sp.run(["sysctl", "-p", str(sysctl_path)], capture_output=True, check=False)
+        log.info("IP forwarding enabled persistently via %s", sysctl_path)
+    except OSError as exc:
+        log.warning("Could not write %s: %s — IP forwarding must be enabled manually", sysctl_path, exc)
 
 
 def _probe_localhost(port: int) -> bool:
