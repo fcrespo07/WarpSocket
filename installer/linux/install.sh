@@ -392,7 +392,7 @@ install_server() {
 
     info "Installing Python dependencies (this may take ~30-60s)"
     $SUDO "$INSTALL_PREFIX/.venv/bin/pip" install --upgrade --disable-pip-version-check pip
-    $SUDO "$INSTALL_PREFIX/.venv/bin/pip" install --disable-pip-version-check -e "$REPO_DIR/server"
+    $SUDO "$INSTALL_PREFIX/.venv/bin/pip" install --disable-pip-version-check "$REPO_DIR/server"
 
     # Symlink so user can call `warpsocket-server` directly
     $SUDO ln -sf "$INSTALL_PREFIX/.venv/bin/warpsocket-server" "$BIN_LINK"
@@ -589,7 +589,7 @@ install_client() {
 
     info "Installing Python dependencies (this may take ~30-60s)"
     $SUDO "$CLIENT_PREFIX/.venv/bin/pip" install --upgrade --disable-pip-version-check pip
-    $SUDO "$CLIENT_PREFIX/.venv/bin/pip" install --disable-pip-version-check -e "$REPO_DIR/client"
+    $SUDO "$CLIENT_PREFIX/.venv/bin/pip" install --disable-pip-version-check "$REPO_DIR/client"
 
     $SUDO ln -sf "$CLIENT_PREFIX/.venv/bin/warpsocket" "$CLIENT_BIN_LINK"
     ok "Linked: ${BOLD}${CLIENT_BIN_LINK}${RESET} -> ${CLIENT_PREFIX}/.venv/bin/warpsocket"
