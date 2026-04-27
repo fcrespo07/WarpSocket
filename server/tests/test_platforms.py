@@ -93,17 +93,36 @@ class TestLinuxPlatform:
                     )
 
 
+    @patch("warpsocket_server.platforms.linux._SYSCTL_DROP_IN")
     @patch("warpsocket_server.platforms.linux._run")
     def test_uninstall_wg_config_disables_unit_and_removes_file(
-        self, mock_run: MagicMock, tmp_path: Path
+        self, mock_run: MagicMock, mock_sysctl: MagicMock, tmp_path: Path
     ) -> None:
         conf = tmp_path / "wg0.conf"
         conf.write_text("[Interface]\n")
+        mock_sysctl.exists.return_value = False
         with patch.object(LinuxServerPlatform, "wg_config_dir", return_value=tmp_path):
             LinuxServerPlatform().uninstall_wg_config()
         cmds = [call.args[0] for call in mock_run.call_args_list]
         assert any("disable" in c for c in cmds)
         assert not conf.exists()
+
+    @patch("warpsocket_server.platforms.linux._SYSCTL_DROP_IN")
+    @patch("warpsocket_server.platforms.linux._run")
+    def test_uninstall_wg_config_removes_sysctl_drop_in(
+        self, mock_run: MagicMock, mock_sysctl: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_sysctl.exists.return_value = True
+        with patch.object(LinuxServerPlatform, "wg_config_dir", return_value=tmp_path):
+            LinuxServerPlatform().uninstall_wg_config()
+        mock_sysctl.unlink.assert_called_once()
+        cmds = [call.args[0] for call in mock_run.call_args_list]
+        assert ["sysctl", "--system"] in cmds
+
+    def test_install_prefix_and_bin_link_match_installer(self) -> None:
+        p = LinuxServerPlatform()
+        assert p.install_prefix() == Path("/opt/warpsocket-server")
+        assert p.bin_link() == Path("/usr/local/bin/warpsocket-server")
 
     @patch("warpsocket_server.platforms.linux._run")
     def test_restart_wstunnel_service(self, mock_run: MagicMock) -> None:

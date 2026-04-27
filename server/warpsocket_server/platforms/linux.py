@@ -11,6 +11,10 @@ log = logging.getLogger(__name__)
 
 _SERVICE_NAME = "wstunnel-warpsocket.service"
 _SERVICE_PATH = Path("/etc/systemd/system") / _SERVICE_NAME
+_SYSCTL_DROP_IN = Path("/etc/sysctl.d/99-warpsocket.conf")
+# These mirror the paths in installer/linux/install.sh — keep in sync.
+_INSTALL_PREFIX = Path("/opt/warpsocket-server")
+_BIN_LINK = Path("/usr/local/bin/warpsocket-server")
 
 _UNIT_TEMPLATE = """\
 [Unit]
@@ -140,10 +144,23 @@ class LinuxServerPlatform(ServerPlatform):
 
     def uninstall_wg_config(self, interface: str = "wg0") -> None:
         unit = f"wg-quick@{interface}.service"
+        # `systemctl disable --now` calls wg-quick down, which runs PostDown
+        # and removes the iptables rules + sysctl ip_forward our PostUp set.
         _run(["systemctl", "disable", "--now", unit], check=False)
         conf_path = self.wg_config_dir() / f"{interface}.conf"
         if conf_path.exists():
             conf_path.unlink()
+        # Remove the persistent sysctl drop-in we wrote during setup.
+        if _SYSCTL_DROP_IN.exists():
+            _SYSCTL_DROP_IN.unlink()
+            # Re-apply remaining sysctl files so ip_forward goes back to default.
+            _run(["sysctl", "--system"], check=False)
 
     def wg_config_dir(self) -> Path:
         return Path("/etc/wireguard")
+
+    def install_prefix(self) -> Path | None:
+        return _INSTALL_PREFIX
+
+    def bin_link(self) -> Path | None:
+        return _BIN_LINK

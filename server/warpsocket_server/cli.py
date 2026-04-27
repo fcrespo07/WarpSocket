@@ -301,16 +301,67 @@ def _cmd_restart(args: argparse.Namespace) -> int:
     return 0
 
 
+def _spawn_deferred_cleanup(install_prefix: Path, bin_link: Path | None) -> None:
+    """Spawn a detached shell script that removes paths AFTER this process exits.
+
+    Necessary because the running Python interpreter lives inside install_prefix
+    (e.g. /opt/warpsocket-server/.venv) — we can't rmtree the dir we're executing
+    from. The script polls for our PID to disappear, then deletes itself last.
+    """
+    import os
+    import shlex
+    import subprocess
+    import tempfile
+
+    pid = os.getpid()
+    targets = [str(install_prefix)]
+    if bin_link is not None:
+        targets.append(str(bin_link))
+
+    # Build rm commands: -rf for the prefix (directory), -f for the symlink.
+    rm_lines = [f"rm -rf {shlex.quote(str(install_prefix))}"]
+    if bin_link is not None:
+        rm_lines.append(f"rm -f {shlex.quote(str(bin_link))}")
+
+    script = (
+        "#!/usr/bin/env bash\n"
+        "set -e\n"
+        f"while kill -0 {pid} 2>/dev/null; do sleep 0.3; done\n"
+        "sleep 1\n"
+        + "\n".join(rm_lines)
+        + "\nrm -f \"$0\"\n"
+    )
+    fd, script_path = tempfile.mkstemp(prefix="warpsocket-uninstall-", suffix=".sh")
+    with os.fdopen(fd, "w") as f:
+        f.write(script)
+    os.chmod(script_path, 0o755)
+    subprocess.Popen(
+        ["/bin/bash", script_path],
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def _cmd_uninstall(args: argparse.Namespace) -> int:
     from warpsocket_server.platforms import PlatformError, get_server_platform
 
     config_path = _resolve_config_path(args)
     config_dir = config_path.parent
+    platform = get_server_platform()
+    install_prefix = platform.install_prefix()
+    bin_link = platform.bin_link()
 
-    console.print("[bold red]WARNING:[/bold red] This will permanently remove WarpSocket server.")
-    console.print("  - wstunnel systemd service")
-    console.print("  - WireGuard interface and config (wg0)")
-    console.print(f"  - Server config directory: {config_dir}")
+    console.print("[bold red]WARNING:[/bold red] This will permanently remove WarpSocket server:")
+    console.print("  • wstunnel systemd service")
+    console.print("  • WireGuard interface, config and PostUp/PostDown rules")
+    console.print(f"  • Server config and TLS certificates: {config_dir}")
+    console.print("  • Persistent IP forwarding sysctl drop-in")
+    if install_prefix is not None:
+        console.print(f"  • Install directory: {install_prefix}")
+    if bin_link is not None:
+        console.print(f"  • CLI symlink: {bin_link}")
 
     if not args.yes:
         answer = console.input("\nType [bold]yes[/bold] to confirm: ")
@@ -318,39 +369,48 @@ def _cmd_uninstall(args: argparse.Namespace) -> int:
             console.print("Aborted.")
             return 1
 
-    platform = get_server_platform()
-    errors: list[str] = []
+    warnings: list[str] = []
 
-    console.print("\nRemoving wstunnel service...", end=" ")
-    try:
-        platform.uninstall_wstunnel_service()
-        console.print("[green]done[/green]")
-    except PlatformError as exc:
-        console.print(f"[yellow]warning:[/yellow] {exc}")
-        errors.append(str(exc))
+    def _step(label: str, fn: callable) -> None:
+        console.print(f"  {label}...", end=" ")
+        try:
+            fn()
+            console.print("[green]done[/green]")
+        except (PlatformError, OSError) as exc:
+            console.print(f"[yellow]warning:[/yellow] {exc}")
+            warnings.append(f"{label}: {exc}")
 
-    console.print("Removing WireGuard config...", end=" ")
-    try:
-        platform.uninstall_wg_config()
-        console.print("[green]done[/green]")
-    except PlatformError as exc:
-        console.print(f"[yellow]warning:[/yellow] {exc}")
-        errors.append(str(exc))
+    console.print()
+    _step("Stopping & removing wstunnel service", platform.uninstall_wstunnel_service)
+    _step("Bringing down WireGuard + removing config", platform.uninstall_wg_config)
 
-    console.print(f"Removing config directory {config_dir}...", end=" ")
-    import shutil
-    try:
+    def _rm_config_dir() -> None:
+        import shutil
         if config_dir.exists():
             shutil.rmtree(config_dir)
-        console.print("[green]done[/green]")
-    except OSError as exc:
-        console.print(f"[yellow]warning:[/yellow] {exc}")
-        errors.append(str(exc))
 
-    if errors:
+    _step(f"Removing config dir ({config_dir})", _rm_config_dir)
+
+    # Defer venv + symlink removal until after we exit (we live inside install_prefix).
+    if install_prefix is not None and install_prefix.exists():
+        try:
+            _spawn_deferred_cleanup(install_prefix, bin_link)
+            console.print(
+                f"  Scheduled removal of {install_prefix}"
+                + (f" and {bin_link}" if bin_link else "")
+                + " after exit... [green]done[/green]"
+            )
+        except OSError as exc:
+            console.print(f"  Scheduling cleanup... [yellow]warning:[/yellow] {exc}")
+            warnings.append(f"deferred cleanup: {exc}")
+    elif bin_link is not None and bin_link.exists():
+        # No install prefix to remove (e.g., dev install) — just unlink the binary.
+        _step(f"Removing CLI symlink ({bin_link})", lambda: bin_link.unlink())
+
+    if warnings:
         console.print(
             "\n[yellow]Uninstall completed with warnings.[/yellow] "
-            "Some steps may require manual cleanup."
+            f"({len(warnings)} step(s) reported issues — see above.)"
         )
         return 1
 

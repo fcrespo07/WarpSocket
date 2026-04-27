@@ -63,3 +63,11 @@ class ServerPlatform(ABC):
     @abstractmethod
     def wg_config_dir(self) -> Path:
         ...
+
+    def install_prefix(self) -> Path | None:
+        """Where the OS installer puts the venv/bundle. None if not applicable."""
+        return None
+
+    def bin_link(self) -> Path | None:
+        """Where the OS installer puts the CLI symlink. None if not applicable."""
+        return None

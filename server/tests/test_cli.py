@@ -246,6 +246,8 @@ class TestUninstall:
     def test_uninstall_with_yes_flag(self, mock_platform: MagicMock, tmp_path: Path) -> None:
         config_dir = _write_server_config(tmp_path)
         fake = MagicMock()
+        fake.install_prefix.return_value = None
+        fake.bin_link.return_value = None
         mock_platform.return_value = fake
         ret = main(["--config-dir", str(config_dir), "uninstall", "--yes"])
         assert ret == 0
@@ -259,10 +261,14 @@ class TestUninstall:
         self, mock_platform: MagicMock, mock_console: MagicMock, tmp_path: Path
     ) -> None:
         config_dir = _write_server_config(tmp_path)
+        fake = MagicMock()
+        fake.install_prefix.return_value = None
+        fake.bin_link.return_value = None
+        mock_platform.return_value = fake
         mock_console.input.return_value = "no"
         ret = main(["--config-dir", str(config_dir), "uninstall"])
         assert ret == 1
-        mock_platform.return_value.uninstall_wstunnel_service.assert_not_called()
+        fake.uninstall_wstunnel_service.assert_not_called()
 
     @patch("warpsocket_server.cli.console")
     @patch("warpsocket_server.platforms.get_server_platform")
@@ -273,6 +279,8 @@ class TestUninstall:
         mock_console.input.return_value = "yes"
         mock_console.print = MagicMock()
         fake = MagicMock()
+        fake.install_prefix.return_value = None
+        fake.bin_link.return_value = None
         mock_platform.return_value = fake
         ret = main(["--config-dir", str(config_dir), "uninstall"])
         assert ret == 0
@@ -286,10 +294,52 @@ class TestUninstall:
 
         config_dir = _write_server_config(tmp_path)
         fake = MagicMock()
+        fake.install_prefix.return_value = None
+        fake.bin_link.return_value = None
         fake.uninstall_wstunnel_service.side_effect = PlatformError("service not found")
         mock_platform.return_value = fake
         ret = main(["--config-dir", str(config_dir), "uninstall", "--yes"])
         assert ret == 1
+
+    @patch("warpsocket_server.cli._spawn_deferred_cleanup")
+    @patch("warpsocket_server.platforms.get_server_platform")
+    def test_uninstall_schedules_deferred_cleanup_when_install_prefix_exists(
+        self,
+        mock_platform: MagicMock,
+        mock_spawn: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        # Use a sibling dir for config so that removing it doesn't also wipe
+        # install_prefix (which would make .exists() fail before we schedule).
+        etc_dir = tmp_path / "etc"
+        etc_dir.mkdir()
+        config_dir = _write_server_config(etc_dir)
+        prefix = tmp_path / "opt-warpsocket"
+        prefix.mkdir()
+        bin_link = tmp_path / "warpsocket-server"
+        fake = MagicMock()
+        fake.install_prefix.return_value = prefix
+        fake.bin_link.return_value = bin_link
+        mock_platform.return_value = fake
+        ret = main(["--config-dir", str(config_dir), "uninstall", "--yes"])
+        assert ret == 0
+        mock_spawn.assert_called_once_with(prefix, bin_link)
+
+    @patch("warpsocket_server.cli._spawn_deferred_cleanup")
+    @patch("warpsocket_server.platforms.get_server_platform")
+    def test_uninstall_skips_deferred_cleanup_when_no_install_prefix(
+        self,
+        mock_platform: MagicMock,
+        mock_spawn: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        config_dir = _write_server_config(tmp_path)
+        fake = MagicMock()
+        fake.install_prefix.return_value = None
+        fake.bin_link.return_value = None
+        mock_platform.return_value = fake
+        main(["--config-dir", str(config_dir), "uninstall", "--yes"])
+        mock_spawn.assert_not_called()
 
 
 class TestRevokeClient:
