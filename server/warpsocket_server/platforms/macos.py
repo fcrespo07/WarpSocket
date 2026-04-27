@@ -38,5 +38,8 @@ class MacOSServerPlatform(ServerPlatform):
     def uninstall_wg_config(self, interface: str = "wg0") -> None:
         raise PlatformError("macOS server support not implemented yet")
 
+    def restart_wg(self, interface: str = "wg0") -> None:
+        raise PlatformError("macOS server support not implemented yet")
+
     def wg_config_dir(self) -> Path:
         return Path("/usr/local/etc/wireguard")

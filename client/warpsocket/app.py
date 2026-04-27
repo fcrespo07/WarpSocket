@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import queue
 import sys
 import tempfile
 from pathlib import Path
+from typing import Callable
 
 from warpsocket import __version__
 from warpsocket.config import ClientConfig, ConfigError, default_config_path
@@ -94,7 +96,7 @@ def _load_or_wizard() -> ClientConfig | None:
 
 
 def _show_log_window(memory_handler: object, root: object) -> None:
-    """Open a live-updating log window. Must be called on the main (tkinter) thread."""
+    """Open a live-updating log window. MUST be called from the tkinter main thread."""
     import customtkinter as ctk
 
     from warpsocket.logs import MemoryLogHandler
@@ -105,11 +107,16 @@ def _show_log_window(memory_handler: object, root: object) -> None:
     win = ctk.CTkToplevel(root)
     win.title("WarpSocket — Logs")
     win.geometry("700x420")
-    win.lift()
-    win.focus_force()
+    try:
+        win.lift()
+        win.attributes("-topmost", True)
+        win.after(200, lambda: win.attributes("-topmost", False))
+        win.focus_force()
+    except Exception:
+        log.exception("Could not raise log window")
 
     text = ctk.CTkTextbox(
-        win, state="normal", wrap="word", font=ctk.CTkFont(family="Consolas", size=11)
+        win, wrap="word", font=ctk.CTkFont(family="Consolas", size=11)
     )
     text.pack(fill="both", expand=True, padx=8, pady=8)
 
@@ -129,6 +136,25 @@ def _show_log_window(memory_handler: object, root: object) -> None:
         win.after(500, _refresh)
 
     _refresh()
+
+
+def _pump_ui_queue(root: object, ui_queue: queue.Queue) -> None:
+    """Process pending UI actions on the tkinter main thread.
+
+    Tcl/tkinter is not thread-safe; calling root.after() from a non-main
+    thread (e.g. pystray's tray thread) silently fails on Windows. The
+    queue + main-thread polling pattern is the canonical workaround.
+    """
+    try:
+        while True:
+            action: Callable[[], None] = ui_queue.get_nowait()
+            try:
+                action()
+            except Exception:
+                log.exception("UI action raised")
+    except queue.Empty:
+        pass
+    root.after(50, lambda: _pump_ui_queue(root, ui_queue))
 
 
 def _ensure_elevated() -> None:
@@ -194,6 +220,11 @@ def main() -> int:
         root = ctk.CTk()
         root.withdraw()
 
+        # Queue for actions that must run on the main thread. Tray callbacks
+        # (which run in pystray's thread) push closures here; _pump_ui_queue
+        # drains them from the tkinter mainloop.
+        ui_queue: queue.Queue[Callable[[], None]] = queue.Queue()
+
         manager = TunnelManager(config)
 
         def on_import_warpcfg() -> None:
@@ -210,15 +241,15 @@ def main() -> int:
                         "Configuración actualizada.\nReinicia WarpSocket para aplicar los cambios.",
                     )
 
-            root.after(0, _do)
+            ui_queue.put(_do)
 
         def on_view_logs() -> None:
-            root.after(0, lambda: _show_log_window(memory_handler, root))
+            ui_queue.put(lambda: _show_log_window(memory_handler, root))
 
         def on_quit() -> None:
             log.info("User quit — stopping tunnel")
             manager.stop()
-            root.after(0, root.quit)
+            ui_queue.put(root.quit)
 
         tray = TrayApp(
             manager=manager,
@@ -230,7 +261,8 @@ def main() -> int:
         manager.start()
         tray.run()  # Starts pystray in background thread (non-blocking)
         log.info("Tray running — entering UI event loop")
-        root.mainloop()  # Main thread: blocks here until on_quit calls root.quit()
+        root.after(50, lambda: _pump_ui_queue(root, ui_queue))
+        root.mainloop()  # Main thread: blocks here until on_quit pushes root.quit
 
         manager.stop()
         log.info("WarpSocket shut down cleanly")

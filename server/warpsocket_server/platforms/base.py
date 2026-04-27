@@ -48,6 +48,15 @@ class ServerPlatform(ABC):
         ...
 
     @abstractmethod
+    def restart_wg(self, interface: str = "wg0") -> None:
+        """Bring the WireGuard interface fully down and up again.
+
+        Required when PostUp/PostDown rules in the config have changed —
+        `wg syncconf` does a hot reload but doesn't re-run those scripts.
+        """
+        ...
+
+    @abstractmethod
     def uninstall_wg_config(self, interface: str = "wg0") -> None:
         ...
 

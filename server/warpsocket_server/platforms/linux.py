@@ -129,6 +129,15 @@ class LinuxServerPlatform(ServerPlatform):
     def is_wg_active(self, interface: str = "wg0") -> bool:
         return Path(f"/sys/class/net/{interface}").exists()
 
+    def restart_wg(self, interface: str = "wg0") -> None:
+        unit = f"wg-quick@{interface}.service"
+        try:
+            _run(["systemctl", "restart", unit])
+        except subprocess.CalledProcessError as exc:
+            raise PlatformError(
+                f"Failed to restart {unit}: {exc.stderr.strip()}"
+            ) from exc
+
     def uninstall_wg_config(self, interface: str = "wg0") -> None:
         unit = f"wg-quick@{interface}.service"
         _run(["systemctl", "disable", "--now", unit], check=False)

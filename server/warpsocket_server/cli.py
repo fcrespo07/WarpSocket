@@ -88,10 +88,14 @@ def _cmd_add_client(args: argparse.Namespace) -> int:
     config_path = _resolve_config_path(args)
     updated.save(config_path)
 
-    # Write WG server conf
-    wg_conf_dir = config_path.parent
-    wg_conf_path = wg_conf_dir / "wg0.conf"
-    wg_conf_path.write_text(build_server_wg_conf(updated), encoding="utf-8")
+    # Persist WG server conf to the OS location wg-quick uses (e.g. /etc/wireguard/wg0.conf).
+    # Hot reload via wg syncconf — keeps existing peers connected. PostUp/PostDown won't
+    # re-run, but they don't change between calls (only the peer list does).
+    from warpsocket_server.platforms import PlatformError, get_server_platform
+    try:
+        get_server_platform().install_wg_config(build_server_wg_conf(updated))
+    except PlatformError as exc:
+        log.warning("Could not persist WG config to OS location: %s", exc)
 
     # Build and write .warpcfg
     warpcfg = build_warpcfg(config, name, client_private_key, client_address)
@@ -152,11 +156,53 @@ def _cmd_revoke_client(args: argparse.Namespace) -> int:
     config_path = _resolve_config_path(args)
     updated.save(config_path)
 
-    # Rewrite WG conf
-    wg_conf_path = config_path.parent / "wg0.conf"
-    wg_conf_path.write_text(build_server_wg_conf(updated), encoding="utf-8")
+    # Persist updated peer list to the OS WG config (hot reload, keeps others connected).
+    from warpsocket_server.platforms import PlatformError, get_server_platform
+    try:
+        get_server_platform().install_wg_config(build_server_wg_conf(updated))
+    except PlatformError as exc:
+        log.warning("Could not persist WG config to OS location: %s", exc)
 
     console.print(f"[green]Client '{name}' revoked.[/green]")
+    return 0
+
+
+def _cmd_restart(args: argparse.Namespace) -> int:
+    """Regenerate wg0.conf from current config and fully restart wg-quick + wstunnel.
+
+    Use this after upgrading WarpSocket or whenever PostUp/PostDown rules change —
+    a hot reload (wg syncconf) does NOT re-run those scripts.
+    """
+    from warpsocket_server.platforms import PlatformError, get_server_platform
+
+    config = _load_config(args)
+    platform = get_server_platform()
+
+    console.print("[bold]Regenerating WireGuard config...[/bold]")
+    try:
+        platform.install_wg_config(build_server_wg_conf(config))
+        console.print("  [green]✓[/green] wg0.conf written")
+    except PlatformError as exc:
+        console.print(f"  [red]✗[/red] WireGuard config: {exc}")
+        return 1
+
+    console.print("[bold]Restarting WireGuard interface (PostUp/PostDown will re-run)...[/bold]")
+    try:
+        platform.restart_wg()
+        console.print("  [green]✓[/green] wg-quick restarted")
+    except PlatformError as exc:
+        console.print(f"  [red]✗[/red] WireGuard restart: {exc}")
+        return 1
+
+    console.print("[bold]Restarting wstunnel service...[/bold]")
+    try:
+        platform.restart_wstunnel_service()
+        console.print("  [green]✓[/green] wstunnel restarted")
+    except PlatformError as exc:
+        console.print(f"  [red]✗[/red] wstunnel restart: {exc}")
+        return 1
+
+    console.print("\n[green]Server restarted successfully.[/green]")
     return 0
 
 
@@ -291,6 +337,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="Show server status")
 
+    sub.add_parser(
+        "restart",
+        help="Regenerate wg0.conf and fully restart wg-quick + wstunnel "
+             "(use after upgrading or if PostUp rules changed)",
+    )
+
     p_uninstall = sub.add_parser("uninstall", help="Remove WarpSocket server completely")
     p_uninstall.add_argument(
         "--yes", "-y", action="store_true", help="Skip confirmation prompt"
@@ -305,6 +357,7 @@ _COMMANDS: dict[str, callable] = {
     "list-clients": _cmd_list_clients,
     "revoke-client": _cmd_revoke_client,
     "status": _cmd_status,
+    "restart": _cmd_restart,
     "uninstall": _cmd_uninstall,
 }
 

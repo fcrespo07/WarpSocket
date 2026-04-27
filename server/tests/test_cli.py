@@ -131,6 +131,34 @@ class TestStatus:
         assert ret == 0
 
 
+class TestRestart:
+    @patch("warpsocket_server.platforms.get_server_platform")
+    def test_restart_calls_install_wg_and_restarts_services(
+        self, mock_platform: MagicMock, tmp_path: Path
+    ) -> None:
+        config_dir = _write_server_config(tmp_path)
+        fake = MagicMock()
+        mock_platform.return_value = fake
+        ret = main(["--config-dir", str(config_dir), "restart"])
+        assert ret == 0
+        fake.install_wg_config.assert_called_once()
+        fake.restart_wg.assert_called_once()
+        fake.restart_wstunnel_service.assert_called_once()
+
+    @patch("warpsocket_server.platforms.get_server_platform")
+    def test_restart_returns_1_on_wg_failure(
+        self, mock_platform: MagicMock, tmp_path: Path
+    ) -> None:
+        from warpsocket_server.platforms.base import PlatformError
+
+        config_dir = _write_server_config(tmp_path)
+        fake = MagicMock()
+        fake.restart_wg.side_effect = PlatformError("boom")
+        mock_platform.return_value = fake
+        ret = main(["--config-dir", str(config_dir), "restart"])
+        assert ret == 1
+
+
 class TestUninstall:
     @patch("warpsocket_server.platforms.get_server_platform")
     def test_uninstall_with_yes_flag(self, mock_platform: MagicMock, tmp_path: Path) -> None:

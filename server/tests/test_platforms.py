@@ -125,6 +125,18 @@ class TestLinuxPlatform:
         cmds = [call.args[0] for call in mock_run.call_args_list]
         assert any("disable" in c for c in cmds)
 
+    @patch("warpsocket_server.platforms.linux._run")
+    def test_restart_wg(self, mock_run: MagicMock) -> None:
+        LinuxServerPlatform().restart_wg()
+        cmds = [call.args[0] for call in mock_run.call_args_list]
+        assert ["systemctl", "restart", "wg-quick@wg0.service"] in cmds
+
+    @patch("warpsocket_server.platforms.linux._run")
+    def test_restart_wg_raises_on_failure(self, mock_run: MagicMock) -> None:
+        mock_run.side_effect = subprocess.CalledProcessError(1, "systemctl", stderr="fail")
+        with pytest.raises(PlatformError, match="Failed to restart"):
+            LinuxServerPlatform().restart_wg()
+
 
 class TestStubPlatforms:
     def test_macos_raises_not_implemented(self) -> None:
