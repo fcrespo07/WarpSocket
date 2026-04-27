@@ -131,7 +131,32 @@ def _show_log_window(memory_handler: object, root: object) -> None:
     _refresh()
 
 
+def _ensure_elevated() -> None:
+    """On Windows, re-launch with UAC elevation if not already running as admin."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    if ctypes.windll.shell32.IsUserAnAdmin():
+        return
+
+    # Re-launch self elevated; user sees a single UAC prompt.
+    if getattr(sys, "frozen", False):
+        # PyInstaller bundle — executable is self-contained.
+        executable = sys.executable
+        params = None
+    else:
+        # Running via the Python interpreter.
+        executable = sys.executable
+        params = " ".join(f'"{a}"' for a in sys.argv)
+
+    ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, params, None, 1)
+    # ShellExecuteW returns > 32 on success; <= 32 means error or user cancelled.
+    sys.exit(0 if ret > 32 else 1)
+
+
 def main() -> int:
+    _ensure_elevated()
     memory_handler = setup_logging()
     log.info("WarpSocket client v%s starting", __version__)
 
