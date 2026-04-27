@@ -42,6 +42,9 @@ build = [
 [project.gui-scripts]
 warpsocket = "warpsocket.app:main"
 
+[project.scripts]
+warpsocket-uninstall = "warpsocket.uninstall:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["warpsocket"]
 
