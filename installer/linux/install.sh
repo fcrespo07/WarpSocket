@@ -412,7 +412,7 @@ run_setup_wizard() {
     echo
     info "Launching the setup wizard..."
     echo
-    $SUDO warpsocket-server setup
+    $SUDO warpsocket-server setup </dev/tty
 }
 
 # ----------------------------------------------------------------------------
