@@ -219,6 +219,38 @@ install_python() {
     find_python || die "Python 3.11+ install failed - install manually and rerun"
 }
 
+ensure_python_venv() {
+    # Debian/Ubuntu split out `pythonX.Y-venv` from `pythonX.Y`. If the user
+    # already had Python installed without the venv module, `python -m venv`
+    # bails with "ensurepip is not available". Install the matching package.
+    if "$PYTHON_BIN" -m venv --help >/dev/null 2>&1; then
+        return 0
+    fi
+    warn "$PYTHON_BIN does not have venv support — installing"
+    case "$PKG_MANAGER" in
+        apt)
+            local ver pkg
+            ver=$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+            pkg="python${ver}-venv"
+            info "Installing $pkg"
+            $SUDO bash -c "$PKG_UPDATE_CMD" >/dev/null
+            if ! $SUDO bash -c "$PKG_INSTALL_CMD $pkg" 2>/dev/null; then
+                # Some distros only ship python3-venv (no version-specific package)
+                $SUDO bash -c "$PKG_INSTALL_CMD python3-venv" \
+                    || die "Could not install $pkg or python3-venv. Install manually and rerun."
+            fi
+            ;;
+        dnf|pacman)
+            # On Fedora/Arch venv is part of the base python package; if it's
+            # missing the python install itself is broken — bail with a hint.
+            die "$PYTHON_BIN is missing the venv module. Reinstall python (e.g. '$PKG_INSTALL_CMD python3') and rerun."
+            ;;
+    esac
+    "$PYTHON_BIN" -m venv --help >/dev/null 2>&1 \
+        || die "venv still unavailable after install — check the package manager output above"
+    ok "venv support installed"
+}
+
 ensure_python() {
     if find_python; then
         ok "Python: ${BOLD}${PYTHON_BIN}${RESET} ($($PYTHON_BIN --version))"
@@ -227,6 +259,7 @@ ensure_python() {
         install_python
         ok "Python installed: ${BOLD}${PYTHON_BIN}${RESET}"
     fi
+    ensure_python_venv
 }
 
 # ----------------------------------------------------------------------------
