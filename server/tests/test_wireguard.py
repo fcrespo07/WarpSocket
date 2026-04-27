@@ -44,6 +44,20 @@ class TestBuildServerWgConf:
         assert "Address = 10.0.0.1/24" in conf
         assert "ListenPort = 51820" in conf
 
+    def test_table_off(self) -> None:
+        conf = build_server_wg_conf(_make_config())
+        assert "Table = off" in conf
+
+    def test_forward_rules_use_insert_not_append(self) -> None:
+        conf = build_server_wg_conf(_make_config())
+        assert "iptables -I FORWARD" in conf
+        assert "iptables -A FORWARD" not in conf
+
+    def test_postup_includes_masquerade(self) -> None:
+        conf = build_server_wg_conf(_make_config())
+        assert "MASQUERADE" in conf
+        assert "10.0.0.0/24" in conf
+
     def test_no_peers_when_empty(self) -> None:
         conf = build_server_wg_conf(_make_config())
         assert "[Peer]" not in conf

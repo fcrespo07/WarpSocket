@@ -5,6 +5,7 @@ import os
 import secrets
 import shutil
 import socket
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -179,6 +180,9 @@ def run_setup(config_dir: Path) -> int:
         console.print(f"  [red]✗[/red] WireGuard: {exc}")
         return 1
 
+    # ufw blocks FORWARD by default; allow the wstunnel port and enable forwarding.
+    _configure_ufw_if_active(port)
+
     try:
         platform.install_wstunnel_service(
             port=port,
@@ -219,6 +223,41 @@ def run_setup(config_dir: Path) -> int:
         )
     )
     return 0
+
+
+def _configure_ufw_if_active(wss_port: int) -> None:
+    """If ufw is active, open the wstunnel port and allow IP forwarding."""
+    if sys.platform != "linux":
+        return
+    try:
+        result = subprocess.run(
+            ["ufw", "status"], capture_output=True, text=True, check=False
+        )
+    except FileNotFoundError:
+        return
+    if "Status: active" not in result.stdout:
+        return
+
+    console.print("  [yellow]ufw detected[/yellow] — opening port and enabling forwarding...")
+    subprocess.run(["ufw", "allow", f"{wss_port}/tcp"], capture_output=True, check=False)
+
+    ufw_default = Path("/etc/default/ufw")
+    if ufw_default.exists():
+        try:
+            content = ufw_default.read_text(encoding="utf-8")
+            if 'DEFAULT_FORWARD_POLICY="DROP"' in content:
+                ufw_default.write_text(
+                    content.replace(
+                        'DEFAULT_FORWARD_POLICY="DROP"',
+                        'DEFAULT_FORWARD_POLICY="ACCEPT"',
+                    ),
+                    encoding="utf-8",
+                )
+                subprocess.run(["ufw", "reload"], capture_output=True, check=False)
+        except OSError as exc:
+            log.warning("Could not update ufw default forward policy: %s", exc)
+
+    console.print("  [green]✓[/green] ufw configured")
 
 
 def _enable_ip_forwarding(config_dir: Path) -> None:

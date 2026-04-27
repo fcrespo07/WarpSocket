@@ -76,11 +76,16 @@ def build_server_wg_conf(config: ServerConfig) -> str:
         f"PrivateKey = {config.wg_private_key}",
         f"Address = {config.server_address}",
         f"ListenPort = {config.wg_listen_port}",
-        # Enable IP forwarding and NAT so connected clients can reach the internet.
-        # %i is replaced by wg-quick with the interface name (e.g. wg0).
+        # Table=off: routing is handled by iptables MASQUERADE (PostUp), not wg-quick.
+        # Without this, wg-quick modifies the kernel routing table and can accidentally
+        # break the server's own default route (observed with NetworkManager / VirtualBox NAT).
+        "Table = off",
+        # Insert FORWARD rules at position 1 to run before ufw's default DROP policy.
+        # Using -A (append) puts our ACCEPT after ufw's drop chain, silently blocking
+        # client traffic even though ip_forward is enabled.
         f"PostUp = sysctl -w net.ipv4.ip_forward=1; "
-        f"iptables -A FORWARD -i %i -j ACCEPT; "
-        f"iptables -A FORWARD -o %i -j ACCEPT; "
+        f"iptables -I FORWARD 1 -i %i -j ACCEPT; "
+        f"iptables -I FORWARD 2 -o %i -j ACCEPT; "
         f"iptables -t nat -A POSTROUTING -s {subnet} -j MASQUERADE",
         f"PostDown = iptables -D FORWARD -i %i -j ACCEPT; "
         f"iptables -D FORWARD -o %i -j ACCEPT; "

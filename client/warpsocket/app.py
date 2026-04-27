@@ -95,6 +95,9 @@ def _load_or_wizard() -> ClientConfig | None:
     return run_wizard()
 
 
+_log_window: dict[str, object] = {}  # singleton: at most one log window at a time
+
+
 def _show_log_window(memory_handler: object, root: object) -> None:
     """Open a live-updating log window. MUST be called from the tkinter main thread."""
     import customtkinter as ctk
@@ -104,10 +107,30 @@ def _show_log_window(memory_handler: object, root: object) -> None:
     assert isinstance(memory_handler, MemoryLogHandler)
     assert isinstance(root, ctk.CTk)
 
+    # Raise existing window instead of opening a second one.
+    existing = _log_window.get("win")
+    if existing is not None:
+        try:
+            if existing.winfo_exists():
+                existing.deiconify()
+                existing.lift()
+                existing.focus_force()
+                return
+        except Exception:
+            pass
+        _log_window.pop("win", None)
+
+    # Ensure the hidden root is fully initialised before spawning a child window.
+    # On some Windows/customtkinter versions, CTkToplevel silently fails to appear
+    # if the root hasn't processed its first idle tasks.
+    root.update_idletasks()
+
     win = ctk.CTkToplevel(root)
+    _log_window["win"] = win
     win.title("WarpSocket — Logs")
     win.geometry("700x420")
     try:
+        win.deiconify()
         win.lift()
         win.attributes("-topmost", True)
         win.after(200, lambda: win.attributes("-topmost", False))
@@ -166,13 +189,18 @@ def _ensure_elevated() -> None:
     if ctypes.windll.shell32.IsUserAnAdmin():
         return
 
-    # Re-launch self elevated; user sees a single UAC prompt.
+    # Determine how to relaunch elevated.
     if getattr(sys, "frozen", False):
-        # PyInstaller bundle — executable is self-contained.
+        # PyInstaller bundle — sys.executable IS the .exe, no extra args needed.
         executable = sys.executable
         params = None
+    elif sys.argv[0].endswith(".exe"):
+        # pip-installed entry point: 'warpsocket' becomes warpsocket.exe in Scripts/.
+        # Relaunching the .exe directly is cleaner than python.exe + script path.
+        executable = sys.argv[0]
+        params = None
     else:
-        # Running via the Python interpreter.
+        # Running directly via 'python app.py' or 'python -m warpsocket'.
         executable = sys.executable
         params = " ".join(f'"{a}"' for a in sys.argv)
 
