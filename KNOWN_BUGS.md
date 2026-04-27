@@ -116,6 +116,18 @@ Leyenda de estado:
 - `win.deiconify()` explícito tras crear la ventana para garantizar que no arranque minimizada.
 **Prevención:** Toda ventana secundaria en una app de bandeja debe ser singleton con mecanismo de re-raise.
 
+### 🔴 B-016 — Cliente Windows: WireGuard no se cierra del todo al desconectar
+**Síntomas:** Tras pulsar "Salir" (o reconectar), el túnel WireGuard queda visible en WireGuard for Windows o el servicio sigue apareciendo activo en `sc query`.
+**Causa raíz:** Tres problemas combinados en `platforms/windows.py`:
+1. `wireguard.exe /uninstalltunnelservice <name>` es **asíncrono**: el proceso retorna inmediatamente pero el SCM sigue parando el servicio en background. `disconnect()` no espera a que desaparezca.
+2. El fichero `.conf` en `%LOCALAPPDATA%\WarpSocket\wireguard\<name>.conf` **no se borra** tras el uninstall. WireGuard for Windows detecta conf files y los lista como "tunnels disponibles" aunque el servicio esté parado.
+3. No hay polling posterior para confirmar que `sc query WireGuardTunnel$<name>` deje de devolver `RUNNING`.
+**Próximos pasos:**
+- En `uninstall_wg_tunnel`: tras llamar a `/uninstalltunnelservice`, hacer polling de `sc query` hasta que el servicio desaparezca (o timeout ~5s).
+- Borrar el `.conf` file una vez confirmado que el servicio está parado.
+- Añadir log de advertencia si el uninstall no completa dentro del timeout.
+**Prevención (futura):** Cualquier operación con SCM (Service Control Manager) de Windows debe asumir asincronía y esperar confirmación explícita.
+
 ---
 
 ## Cómo añadir un bug nuevo
