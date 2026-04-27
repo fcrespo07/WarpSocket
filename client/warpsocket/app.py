@@ -93,30 +93,42 @@ def _load_or_wizard() -> ClientConfig | None:
     return run_wizard()
 
 
-def _open_log_viewer(memory_handler: object) -> None:
-    """Open the live log window in a new thread."""
-    import threading
-
+def _show_log_window(memory_handler: object, root: object) -> None:
+    """Open a live-updating log window. Must be called on the main (tkinter) thread."""
     import customtkinter as ctk
 
     from warpsocket.logs import MemoryLogHandler
 
     assert isinstance(memory_handler, MemoryLogHandler)
+    assert isinstance(root, ctk.CTk)
 
-    def _show() -> None:
-        win = ctk.CTkToplevel()
-        win.title("WarpSocket — Logs")
-        win.geometry("700x420")
+    win = ctk.CTkToplevel(root)
+    win.title("WarpSocket — Logs")
+    win.geometry("700x420")
+    win.lift()
+    win.focus_force()
 
-        text = ctk.CTkTextbox(win, state="normal", wrap="word", font=ctk.CTkFont(family="Consolas", size=11))
-        text.pack(fill="both", expand=True, padx=8, pady=8)
+    text = ctk.CTkTextbox(
+        win, state="normal", wrap="word", font=ctk.CTkFont(family="Consolas", size=11)
+    )
+    text.pack(fill="both", expand=True, padx=8, pady=8)
 
-        for line in memory_handler.snapshot():
-            text.insert("end", line + "\n")
-        text.see("end")
-        text.configure(state="disabled")
+    last_count = [0]
 
-    threading.Thread(target=_show, daemon=True, name="warpsocket-log-viewer").start()
+    def _refresh() -> None:
+        if not win.winfo_exists():
+            return
+        lines = memory_handler.snapshot()
+        if len(lines) > last_count[0]:
+            text.configure(state="normal")
+            for line in lines[last_count[0]:]:
+                text.insert("end", line + "\n")
+            text.see("end")
+            text.configure(state="disabled")
+            last_count[0] = len(lines)
+        win.after(500, _refresh)
+
+    _refresh()
 
 
 def main() -> int:
@@ -147,30 +159,41 @@ def main() -> int:
             config.wireguard.tunnel_name,
         )
 
+        import customtkinter as ctk
+
         from warpsocket.tray import TrayApp
         from warpsocket.tunnel import TunnelManager
+
+        # Hidden root window — owns the tkinter event loop on the main thread.
+        # All CTkToplevel windows (log viewer, dialogs) must be children of this root.
+        root = ctk.CTk()
+        root.withdraw()
 
         manager = TunnelManager(config)
 
         def on_import_warpcfg() -> None:
-            from warpsocket.wizard import run_wizard
+            def _do() -> None:
+                from warpsocket.wizard import run_wizard
 
-            new_config = run_wizard()
-            if new_config is not None:
-                log.info("Re-imported config; restart WarpSocket to apply.")
-                from tkinter import messagebox
+                new_config = run_wizard()
+                if new_config is not None:
+                    log.info("Re-imported config; restart WarpSocket to apply.")
+                    from tkinter import messagebox
 
-                messagebox.showinfo(
-                    "WarpSocket",
-                    "Configuración actualizada.\nReinicia WarpSocket para aplicar los cambios.",
-                )
+                    messagebox.showinfo(
+                        "WarpSocket",
+                        "Configuración actualizada.\nReinicia WarpSocket para aplicar los cambios.",
+                    )
+
+            root.after(0, _do)
 
         def on_view_logs() -> None:
-            _open_log_viewer(memory_handler)
+            root.after(0, lambda: _show_log_window(memory_handler, root))
 
         def on_quit() -> None:
             log.info("User quit — stopping tunnel")
             manager.stop()
+            root.after(0, root.quit)
 
         tray = TrayApp(
             manager=manager,
@@ -180,8 +203,9 @@ def main() -> int:
         )
 
         manager.start()
-        log.info("Tray running — waiting for user interaction")
-        tray.run()  # Blocking — returns when user quits
+        tray.run()  # Starts pystray in background thread (non-blocking)
+        log.info("Tray running — entering UI event loop")
+        root.mainloop()  # Main thread: blocks here until on_quit calls root.quit()
 
         manager.stop()
         log.info("WarpSocket shut down cleanly")

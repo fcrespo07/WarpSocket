@@ -92,6 +92,7 @@ class TrayApp:
             log.exception("Error in on_quit callback")
 
     def run(self) -> None:
+        """Start the tray icon in a background thread (non-blocking)."""
         import pystray
 
         menu = pystray.Menu(
@@ -111,4 +112,4 @@ class TrayApp:
             title=tooltip_for_state(initial_state),
             menu=menu,
         )
-        self._icon.run()
+        self._icon.run_detached()
