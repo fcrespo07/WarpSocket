@@ -116,17 +116,20 @@ Leyenda de estado:
 - `win.deiconify()` explícito tras crear la ventana para garantizar que no arranque minimizada.
 **Prevención:** Toda ventana secundaria en una app de bandeja debe ser singleton con mecanismo de re-raise.
 
-### 🔴 B-016 — Cliente Windows: WireGuard no se cierra del todo al desconectar
-**Síntomas:** Tras pulsar "Salir" (o reconectar), el túnel WireGuard queda visible en WireGuard for Windows o el servicio sigue apareciendo activo en `sc query`.
+### ✅ B-016 — Cliente Windows: WireGuard no se cierra del todo al desconectar
+**Síntomas:** Tras pulsar "Salir" (o reconectar), el túnel WireGuard queda visible en WireGuard for Windows o el servicio sigue apareciendo activo en `sc query`. Los reintentos de conexión fallaban en `tcp_probe` porque el adaptador WG (con `AllowedIPs=0.0.0.0/0`) seguía activo cuando ya se había borrado la ruta de bypass.
 **Causa raíz:** Tres problemas combinados en `platforms/windows.py`:
-1. `wireguard.exe /uninstalltunnelservice <name>` es **asíncrono**: el proceso retorna inmediatamente pero el SCM sigue parando el servicio en background. `disconnect()` no espera a que desaparezca.
-2. El fichero `.conf` en `%LOCALAPPDATA%\WarpSocket\wireguard\<name>.conf` **no se borra** tras el uninstall. WireGuard for Windows detecta conf files y los lista como "tunnels disponibles" aunque el servicio esté parado.
-3. No hay polling posterior para confirmar que `sc query WireGuardTunnel$<name>` deje de devolver `RUNNING`.
-**Próximos pasos:**
-- En `uninstall_wg_tunnel`: tras llamar a `/uninstalltunnelservice`, hacer polling de `sc query` hasta que el servicio desaparezca (o timeout ~5s).
-- Borrar el `.conf` file una vez confirmado que el servicio está parado.
-- Añadir log de advertencia si el uninstall no completa dentro del timeout.
-**Prevención (futura):** Cualquier operación con SCM (Service Control Manager) de Windows debe asumir asincronía y esperar confirmación explícita.
+1. `wireguard.exe /uninstalltunnelservice <name>` es **asíncrono**: el proceso retorna inmediatamente pero el SCM sigue parando el servicio en background. `disconnect()` no esperaba a que desapareciera.
+2. El fichero `.conf` en `%LOCALAPPDATA%\WarpSocket\wireguard\<name>.conf` **no se borraba** tras el uninstall. WireGuard for Windows lo detecta y lo lista como "tunnel disponible" aunque el servicio esté parado.
+3. Sin polling posterior, la ruta de bypass se borraba mientras el adaptador WG aún enrutaba tráfico → `tcp_probe` fallaba en el siguiente intento.
+**Fix:** `uninstall_wg_tunnel` ahora hace polling de `sc query WireGuardTunnel$<name>` tras el uninstall (timeout 8 s, polling 250 ms) y borra el `.conf` una vez confirmado que el servicio ha desaparecido. Warning en log si se agota el timeout.
+**Prevención:** Cualquier operación con SCM de Windows debe asumir asincronía y esperar confirmación explícita antes de modificar rutas o ficheros dependientes.
+
+### ✅ B-017 — wstunnel muere <1 segundo: no verifica cert auto-firmado correctamente
+**Síntomas:** El log del cliente muestra "Starting wstunnel" seguido de "Tunnel died unexpectedly" ~700 ms después. El servidor no registra ninguna conexión WebSocket tras el fingerprint check. Los reintentos fallan en `tcp_probe` (B-016 cascada).
+**Causa raíz:** wstunnel valida el certificado TLS del servidor contra el CA store del sistema operativo. El certificado auto-firmado generado por el wizard no está en ningún CA store → wstunnel sale inmediatamente con error de verificación TLS.
+**Fix:** Añadido `--dangerous-disable-certificate-verification` al comando de wstunnel en `build_wstunnel_command`. La seguridad de identidad del servidor la proporciona el pinning SHA-256 (`verify_tls_fingerprint`) que se ejecuta antes de arrancar wstunnel, por lo que omitir la validación CA de wstunnel no introduce vulnerabilidades adicionales.
+**Prevención:** Al integrar cualquier binario externo que haga TLS, verificar siempre cómo gestiona certs auto-firmados. No asumir que el flujo Python y el binario heredan la misma configuración de confianza TLS.
 
 ---
 

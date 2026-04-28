@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from platformdirs import user_data_dir
 
 from .base import Platform, PlatformError
+
+log = logging.getLogger(__name__)
 
 _APP_NAME = "WarpSocket"
 _WIREGUARD_EXE = Path(r"C:\Program Files\WireGuard\wireguard.exe")
@@ -42,6 +46,22 @@ class WindowsPlatform(Platform):
             capture_output=True,
             text=True,
         )
+        # /uninstalltunnelservice is async — poll until SCM confirms the service is gone
+        # so callers can safely remove bypass routes without the WG interface still routing traffic.
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            result = subprocess.run(
+                ["sc", "query", f"WireGuardTunnel${name}"],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                break
+            time.sleep(0.25)
+        else:
+            log.warning("WireGuard tunnel '%s' did not stop within timeout; routes may flap", name)
+        conf_path = self._conf_dir / f"{name}.conf"
+        conf_path.unlink(missing_ok=True)
 
     def is_wg_tunnel_active(self, name: str) -> bool:
         result = subprocess.run(

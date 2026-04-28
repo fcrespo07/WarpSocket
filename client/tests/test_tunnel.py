@@ -112,6 +112,7 @@ def test_build_wstunnel_command_has_expected_structure():
     cmd = build_wstunnel_command(cfg, bin_path)
     assert cmd[0] == str(bin_path)
     assert cmd[1] == "client"
+    assert "--dangerous-disable-certificate-verification" in cmd
     assert "-L" in cmd
     forward = cmd[cmd.index("-L") + 1]
     assert forward == "udp://127.0.0.1:51820:10.0.0.1:51820?timeout_sec=0"

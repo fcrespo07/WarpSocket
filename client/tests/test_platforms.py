@@ -83,13 +83,28 @@ def test_uninstall_wg_tunnel_idempotent_when_wireguard_missing(tmp_path, monkeyp
 
 def test_uninstall_wg_tunnel_calls_wireguard(tmp_path, monkeypatch):
     p = WindowsPlatform()
+    monkeypatch.setattr(p, "_conf_dir", tmp_path)
     monkeypatch.setattr("warpsocket.platforms.windows._WIREGUARD_EXE", tmp_path / "wireguard.exe")
     (tmp_path / "wireguard.exe").write_text("fake")
-    with patch("subprocess.run", return_value=_mock_run(0)) as mock_run:
+    # First call: wireguard /uninstalltunnelservice → success
+    # Second call: sc query → service already gone (rc != 0) → stop polling
+    with patch("subprocess.run", side_effect=[_mock_run(0), _mock_run(1)]) as mock_run:
         p.uninstall_wg_tunnel("MyTunnel")
-    args = mock_run.call_args[0][0]
-    assert args[1] == "/uninstalltunnelservice"
-    assert args[2] == "MyTunnel"
+    first_args = mock_run.call_args_list[0][0][0]
+    assert first_args[1] == "/uninstalltunnelservice"
+    assert first_args[2] == "MyTunnel"
+
+
+def test_uninstall_wg_tunnel_deletes_conf_file(tmp_path, monkeypatch):
+    p = WindowsPlatform()
+    monkeypatch.setattr(p, "_conf_dir", tmp_path)
+    monkeypatch.setattr("warpsocket.platforms.windows._WIREGUARD_EXE", tmp_path / "wireguard.exe")
+    (tmp_path / "wireguard.exe").write_text("fake")
+    conf = tmp_path / "MyTunnel.conf"
+    conf.write_text("[Interface]")
+    with patch("subprocess.run", side_effect=[_mock_run(0), _mock_run(1)]):
+        p.uninstall_wg_tunnel("MyTunnel")
+    assert not conf.exists()
 
 
 # --- WindowsPlatform: tunnel status ---
