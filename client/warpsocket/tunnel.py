@@ -94,7 +94,6 @@ class Tunnel:
         self._wstunnel_bin = wstunnel_bin or find_wstunnel()
         self._proc: subprocess.Popen[str] | None = None
         self._stdout_thread: Thread | None = None
-        self._installed_routes: list[str] = []
         self._wg_installed = False
 
     def _drain_stdout(self) -> None:
@@ -120,11 +119,6 @@ class Tunnel:
             verify_tls_fingerprint(s.endpoint, s.port, self._config.tls.cert_fingerprint_sha256)
         except NetworkError as exc:
             raise TunnelError(str(exc)) from exc
-
-        gateway = self._platform.get_default_gateway()
-        for ip in self._config.routing.bypass_ips:
-            self._platform.add_host_route(ip, gateway)
-            self._installed_routes.append(ip)
 
         try:
             wg_conf = build_wg_conf(self._config)
@@ -171,12 +165,6 @@ class Tunnel:
                 log.warning("Error uninstalling WG tunnel: %s", exc)
             self._wg_installed = False
 
-        for ip in self._installed_routes:
-            try:
-                self._platform.remove_host_route(ip)
-            except Exception as exc:
-                log.warning("Error removing host route %s: %s", ip, exc)
-        self._installed_routes.clear()
 
     @property
     def is_active(self) -> bool:
