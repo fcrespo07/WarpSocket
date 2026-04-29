@@ -94,8 +94,19 @@ class Tunnel:
         self._platform = platform or get_platform()
         self._wstunnel_bin = wstunnel_bin or find_wstunnel()
         self._proc: subprocess.Popen[str] | None = None
+        self._stdout_thread: Thread | None = None
         self._installed_routes: list[str] = []
         self._wg_installed = False
+
+    def _drain_stdout(self) -> None:
+        assert self._proc is not None
+        try:
+            for line in self._proc.stdout:  # type: ignore[union-attr]
+                stripped = line.rstrip()
+                if stripped:
+                    log.info("wstunnel: %s", stripped)
+        except Exception:
+            pass
 
     def connect(self) -> None:
         s = self._config.server
@@ -129,6 +140,10 @@ class Tunnel:
                 stderr=subprocess.STDOUT,
                 text=True,
             )
+            self._stdout_thread = Thread(
+                target=self._drain_stdout, daemon=True, name="wstunnel-stdout"
+            )
+            self._stdout_thread.start()
         except Exception:
             self.disconnect()
             raise
@@ -144,6 +159,10 @@ class Tunnel:
                     self._proc.wait(timeout=5)
             except Exception as exc:
                 log.warning("Error terminating wstunnel: %s", exc)
+            finally:
+                if self._stdout_thread is not None:
+                    self._stdout_thread.join(timeout=2)
+                    self._stdout_thread = None
             self._proc = None
 
         if self._wg_installed:
