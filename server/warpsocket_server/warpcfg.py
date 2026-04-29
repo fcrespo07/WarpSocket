@@ -26,7 +26,7 @@ def build_warpcfg(
         },
         "tunnel": {
             "local_port": server_config.wg_listen_port,
-            "remote_host": server_config.server_address.split("/")[0],
+            "remote_host": "127.0.0.1",
             "remote_port": server_config.wg_listen_port,
         },
         "wireguard": {
