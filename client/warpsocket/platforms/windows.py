@@ -23,6 +23,15 @@ class WindowsPlatform(Platform):
 
     def install_wg_tunnel(self, name: str, config_text: str) -> Path:
         self._require_wireguard()
+        # Clean up any stale service left over from a previous session.
+        stale = subprocess.run(
+            ["sc", "query", f"WireGuardTunnel${name}"],
+            capture_output=True, text=True,
+        )
+        if stale.returncode == 0:
+            log.warning("Stale WireGuard service found for '%s'; uninstalling before reinstall", name)
+            self.uninstall_wg_tunnel(name)
+
         self._conf_dir.mkdir(parents=True, exist_ok=True)
         conf_path = self._conf_dir / f"{name}.conf"
         conf_path.write_text(config_text, encoding="utf-8")
@@ -62,7 +71,10 @@ class WindowsPlatform(Platform):
         )
         # /uninstalltunnelservice is async — poll until SCM confirms the service is gone
         # so callers can safely remove bypass routes without the WG interface still routing traffic.
-        deadline = time.monotonic() + 8.0
+        # After 5 s send an explicit sc stop in case the service is stuck in STOP_PENDING.
+        deadline = time.monotonic() + 20.0
+        nudge_at = time.monotonic() + 5.0
+        nudged = False
         while time.monotonic() < deadline:
             result = subprocess.run(
                 ["sc", "query", f"WireGuardTunnel${name}"],
@@ -71,6 +83,14 @@ class WindowsPlatform(Platform):
             )
             if result.returncode != 0:
                 break
+            if not nudged and time.monotonic() >= nudge_at:
+                log.warning("WireGuard service '%s' still stopping; sending sc stop nudge", name)
+                subprocess.run(
+                    ["sc", "stop", f"WireGuardTunnel${name}"],
+                    capture_output=True,
+                    text=True,
+                )
+                nudged = True
             time.sleep(0.25)
         else:
             log.warning("WireGuard tunnel '%s' did not stop within timeout; routes may flap", name)
