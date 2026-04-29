@@ -69,12 +69,11 @@ def build_wstunnel_command(config: ClientConfig, wstunnel_bin: Path) -> list[str
     forward = (
         f"udp://127.0.0.1:{t.local_port}:{t.remote_host}:{t.remote_port}?timeout_sec=0"
     )
+    # TLS cert verification is disabled by default in wstunnel v10+; fingerprint
+    # pinning via verify_tls_fingerprint() is the actual identity check.
     return [
         str(wstunnel_bin),
         "client",
-        # Server uses a self-signed cert; fingerprint pinning (verify_tls_fingerprint) is
-        # the actual identity check, so skipping wstunnel's CA validation is safe here.
-        "--dangerous-disable-certificate-verification",
         "-L",
         forward,
         "--http-upgrade-path-prefix",
