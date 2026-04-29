@@ -36,6 +36,20 @@ class WindowsPlatform(Platform):
                 f"Failed to install WireGuard tunnel '{name}': "
                 f"{(result.stderr or result.stdout).strip()}"
             )
+        # /installtunnelservice returns before the service reaches RUNNING; poll until it does
+        # so that is_wg_tunnel_active() returns True by the time wstunnel starts.
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            r = subprocess.run(
+                ["sc", "query", f"WireGuardTunnel${name}"],
+                capture_output=True,
+                text=True,
+            )
+            if r.returncode == 0 and "RUNNING" in r.stdout:
+                break
+            time.sleep(0.25)
+        else:
+            log.warning("WireGuard tunnel '%s' did not reach RUNNING within timeout", name)
         return conf_path
 
     def uninstall_wg_tunnel(self, name: str) -> None:
