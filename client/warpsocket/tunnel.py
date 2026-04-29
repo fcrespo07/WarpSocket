@@ -132,6 +132,7 @@ class Tunnel:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
             self._stdout_thread = Thread(
                 target=self._drain_stdout, daemon=True, name="wstunnel-stdout"
