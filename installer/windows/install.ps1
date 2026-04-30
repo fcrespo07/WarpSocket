@@ -324,7 +324,11 @@ function Resolve-Repo {
         if ((Test-Path (Join-Path $script:REPO_DIR 'CLAUDE.md')) -and
             (Test-Path (Join-Path $script:REPO_DIR 'client'))    -and
             (Test-Path (Join-Path $script:REPO_DIR 'server'))) {
-            Write-Warn "Directory $($script:REPO_DIR) already exists - using as-is"
+            Write-Warn "Directory $($script:REPO_DIR) already exists - pulling latest changes"
+            & git -C $script:REPO_DIR pull
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn "git pull failed (offline?) - continuing with existing checkout"
+            }
             return
         }
         Write-Warn "Directory $($script:REPO_DIR) exists but looks incomplete - recloning"
@@ -429,7 +433,11 @@ function Install-Server {
     $guiExe  = Join-Path $INSTALL_PREFIX '.venv\Scripts\warpsocket-server-gui.exe'
     $guiShim = Join-Path $WARPSOCKET_DIR 'warpsocket-server-gui.bat'
     "@echo off`r`n`"$guiExe`" %*" | Out-File -FilePath $guiShim -Encoding ascii
-    Write-OK "warpsocket-server-gui -> $guiExe"
+    if (Test-Path $guiExe) {
+        Write-OK "warpsocket-server-gui -> $guiExe"
+    } else {
+        Write-Warn "warpsocket-server-gui.exe not found — GUI deps may have failed to install under Python $( & $script:PYTHON_BIN --version 2>&1)"
+    }
 
     # Startup shortcut (launch tray at login, minimized)
     $startupDir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
@@ -471,6 +479,11 @@ function Invoke-SetupWizard {
     Write-Host "  The setup wizard will open automatically on first run." -ForegroundColor DarkGray
     Write-Host ""
     $guiExe = Join-Path $INSTALL_PREFIX '.venv\Scripts\warpsocket-server-gui.exe'
+    if (-not (Test-Path $guiExe)) {
+        Write-Warn "warpsocket-server-gui.exe not found — skipping auto-launch."
+        Write-Host "  Use the 'WarpSocket Server' desktop shortcut to start manually." -ForegroundColor Yellow
+        return
+    }
     Start-Process -FilePath $guiExe
 }
 
