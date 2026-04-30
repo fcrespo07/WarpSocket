@@ -17,6 +17,12 @@
 $ErrorActionPreference = 'Stop'
 
 # ---------------------------------------------------------------------------
+# Log transcript (written regardless of success/failure)
+# ---------------------------------------------------------------------------
+$script:LOG_FILE = Join-Path $env:TEMP "warpsocket-install-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+Start-Transcript -Path $script:LOG_FILE -Force | Out-Null
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 $WARPSOCKET_DIR            = Join-Path $env:ProgramFiles "WarpSocket"
@@ -40,6 +46,10 @@ function Write-Warn { param([string]$Msg) Write-Host "  [!]  $Msg" -ForegroundCo
 function Write-Fail {
     param([string]$Msg)
     Write-Host "  [X]  $Msg" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  Full log: $script:LOG_FILE" -ForegroundColor Yellow
+    Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+    Read-Host "  Press Enter to exit"
     exit 1
 }
 
@@ -537,6 +547,18 @@ function Main {
     Select-Component
     Write-Host ""
     Write-OK "All done."
+    Write-Host "  Log: $script:LOG_FILE" -ForegroundColor DarkGray
+    Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
 }
 
-Main
+try {
+    Main
+} catch {
+    Write-Host ""
+    Write-Host "  [X]  Unexpected error: $_" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  Full log: $script:LOG_FILE" -ForegroundColor Yellow
+    Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+    Read-Host "  Press Enter to exit"
+    exit 1
+}

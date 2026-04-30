@@ -69,12 +69,11 @@ def build_wstunnel_command(config: ClientConfig, wstunnel_bin: Path) -> list[str
     forward = (
         f"udp://127.0.0.1:{t.local_port}:{t.remote_host}:{t.remote_port}?timeout_sec=0"
     )
+    # TLS cert verification is disabled by default in wstunnel v10+; fingerprint
+    # pinning via verify_tls_fingerprint() is the actual identity check.
     return [
         str(wstunnel_bin),
         "client",
-        # Server uses a self-signed cert; fingerprint pinning (verify_tls_fingerprint) is
-        # the actual identity check, so skipping wstunnel's CA validation is safe here.
-        "--dangerous-disable-certificate-verification",
         "-L",
         forward,
         "--http-upgrade-path-prefix",
@@ -94,8 +93,18 @@ class Tunnel:
         self._platform = platform or get_platform()
         self._wstunnel_bin = wstunnel_bin or find_wstunnel()
         self._proc: subprocess.Popen[str] | None = None
-        self._installed_routes: list[str] = []
+        self._stdout_thread: Thread | None = None
         self._wg_installed = False
+
+    def _drain_stdout(self) -> None:
+        assert self._proc is not None
+        try:
+            for line in self._proc.stdout:  # type: ignore[union-attr]
+                stripped = line.rstrip()
+                if stripped:
+                    log.info("wstunnel: %s", stripped)
+        except Exception:
+            pass
 
     def connect(self) -> None:
         s = self._config.server
@@ -111,11 +120,6 @@ class Tunnel:
         except NetworkError as exc:
             raise TunnelError(str(exc)) from exc
 
-        gateway = self._platform.get_default_gateway()
-        for ip in self._config.routing.bypass_ips:
-            self._platform.add_host_route(ip, gateway)
-            self._installed_routes.append(ip)
-
         try:
             wg_conf = build_wg_conf(self._config)
             self._platform.install_wg_tunnel(self._config.wireguard.tunnel_name, wg_conf)
@@ -128,7 +132,12 @@ class Tunnel:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
+            self._stdout_thread = Thread(
+                target=self._drain_stdout, daemon=True, name="wstunnel-stdout"
+            )
+            self._stdout_thread.start()
         except Exception:
             self.disconnect()
             raise
@@ -144,6 +153,10 @@ class Tunnel:
                     self._proc.wait(timeout=5)
             except Exception as exc:
                 log.warning("Error terminating wstunnel: %s", exc)
+            finally:
+                if self._stdout_thread is not None:
+                    self._stdout_thread.join(timeout=2)
+                    self._stdout_thread = None
             self._proc = None
 
         if self._wg_installed:
@@ -153,12 +166,6 @@ class Tunnel:
                 log.warning("Error uninstalling WG tunnel: %s", exc)
             self._wg_installed = False
 
-        for ip in self._installed_routes:
-            try:
-                self._platform.remove_host_route(ip)
-            except Exception as exc:
-                log.warning("Error removing host route %s: %s", ip, exc)
-        self._installed_routes.clear()
 
     @property
     def is_active(self) -> bool:
