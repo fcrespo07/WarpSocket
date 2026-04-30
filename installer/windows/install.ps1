@@ -438,7 +438,8 @@ function Install-Server {
     Write-OK "Core dependencies installed"
 
     Write-Info "Installing GUI dependencies (customtkinter, pillow, pystray)..."
-    & $pip install --quiet --disable-pip-version-check "customtkinter>=5.2" "pillow>=10.0" "pystray>=0.19"
+    # Do NOT use --quiet here: we need to see error messages if a package fails.
+    & $pip install --disable-pip-version-check "customtkinter>=5.2" "pillow>=10.0" "pystray>=0.19"
     $guiPipExit = $LASTEXITCODE
 
     # CLI shim in $WARPSOCKET_DIR (which is in PATH)
@@ -447,20 +448,34 @@ function Install-Server {
     "@echo off`r`n`"$cliExe`" %*" | Out-File -FilePath $cliShim -Encoding ascii
     Write-OK "warpsocket-server -> $cliExe"
 
-    $guiExe  = Join-Path $INSTALL_PREFIX '.venv\Scripts\warpsocket-server-gui.exe'
+    $guiExe     = Join-Path $INSTALL_PREFIX '.venv\Scripts\warpsocket-server-gui.exe'
+    $venvPython = Join-Path $INSTALL_PREFIX '.venv\Scripts\python.exe'
     $script:GUI_AVAILABLE = $false
+    $guiReady = $false
 
     if ($guiPipExit -ne 0) {
-        Write-Warn "GUI dependencies failed to install (exit $guiPipExit)."
+        Write-Warn "GUI dependencies failed to install (exit $guiPipExit). See pip output above."
         Write-Warn "The server CLI (warpsocket-server) will work, but the GUI tray app won't."
-        Write-Warn "You can retry later: $pip install customtkinter pillow pystray"
-    } elseif (-not (Test-Path $guiExe)) {
-        Write-Warn "warpsocket-server-gui.exe not found after install."
-        Write-Warn "Reinstalling package to regenerate entry points..."
-        & $pip install --quiet --disable-pip-version-check --force-reinstall --no-deps -e (Join-Path $script:REPO_DIR 'server')
+        Write-Warn "You can retry later:  $pip install customtkinter pillow pystray"
+    } else {
+        # Verify the packages actually import (catches broken wheels, missing DLLs, etc.)
+        Write-Info "Verifying GUI imports..."
+        & $venvPython -c "import customtkinter; import pystray; import PIL" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "GUI packages installed but fail to import (see output above)."
+            Write-Warn "The GUI tray app will not be available."
+        } elseif (-not (Test-Path $guiExe)) {
+            Write-Warn "warpsocket-server-gui.exe not found — regenerating entry points..."
+            & $pip install --quiet --disable-pip-version-check --force-reinstall --no-deps `
+                -e (Join-Path $script:REPO_DIR 'server')
+            if (Test-Path $guiExe) { $guiReady = $true }
+            else { Write-Warn "Entry point still missing after reinstall — GUI not available." }
+        } else {
+            $guiReady = $true
+        }
     }
 
-    if (Test-Path $guiExe) {
+    if ($guiReady) {
         $script:GUI_AVAILABLE = $true
 
         $guiShim = Join-Path $WARPSOCKET_DIR 'warpsocket-server-gui.bat'
@@ -471,21 +486,35 @@ function Install-Server {
         $wsh        = New-Object -ComObject WScript.Shell
         $startupDir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
 
-        $startupSc = $wsh.CreateShortcut((Join-Path $startupDir 'WarpSocket Server.lnk'))
+        # Patch byte 0x15 in the .lnk file to set "Run as administrator" flag (bit 5).
+        # This avoids needing the user to right-click → "Run as administrator" every time,
+        # since the server requires elevated privileges.
+        function Set-RunAsAdmin {
+            param([string]$LnkPath)
+            $bytes = [System.IO.File]::ReadAllBytes($LnkPath)
+            $bytes[0x15] = $bytes[0x15] -bor 0x20
+            [System.IO.File]::WriteAllBytes($LnkPath, $bytes)
+        }
+
+        $startupLnk = Join-Path $startupDir 'WarpSocket Server.lnk'
+        $startupSc = $wsh.CreateShortcut($startupLnk)
         $startupSc.TargetPath       = $guiExe
         $startupSc.WorkingDirectory = Split-Path $guiExe
         $startupSc.WindowStyle      = 7
         if (Test-Path $iconFile) { $startupSc.IconLocation = $iconFile }
         $startupSc.Save()
-        Write-OK "Startup shortcut: $(Join-Path $startupDir 'WarpSocket Server.lnk')"
+        Set-RunAsAdmin $startupLnk
+        Write-OK "Startup shortcut: $startupLnk"
 
         $desktopDir = $wsh.SpecialFolders('Desktop')
-        $desktopSc  = $wsh.CreateShortcut((Join-Path $desktopDir 'WarpSocket Server.lnk'))
+        $desktopLnk = Join-Path $desktopDir 'WarpSocket Server.lnk'
+        $desktopSc  = $wsh.CreateShortcut($desktopLnk)
         $desktopSc.TargetPath       = $guiExe
         $desktopSc.WorkingDirectory = Split-Path $guiExe
         if (Test-Path $iconFile) { $desktopSc.IconLocation = $iconFile }
         $desktopSc.Save()
-        Write-OK "Desktop shortcut: $(Join-Path $desktopDir 'WarpSocket Server.lnk')"
+        Set-RunAsAdmin $desktopLnk
+        Write-OK "Desktop shortcut: $desktopLnk"
     }
 
     Write-OK "Server installed"

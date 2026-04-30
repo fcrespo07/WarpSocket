@@ -76,9 +76,18 @@ def _ensure_elevated() -> None:
     import ctypes
     if ctypes.windll.shell32.IsUserAnAdmin():
         return
-    executable = sys.executable
-    params = " ".join(f'"{a}"' for a in sys.argv) if not getattr(sys, "frozen", False) else None
-    ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, params, None, 1)
+    # For a frozen PyInstaller binary sys.executable is the .exe.
+    # For a pip console_scripts entry point sys.argv[0] is the .exe wrapper — NOT the
+    # Python interpreter (sys.executable).  Re-launching sys.executable as Python with
+    # the .exe path as a "script" argument would fail with a SyntaxError.
+    if getattr(sys, "frozen", False):
+        exe = sys.executable
+        extra = sys.argv[1:]
+    else:
+        exe = sys.argv[0] if sys.argv else sys.executable
+        extra = sys.argv[1:]
+    params = " ".join(f'"{a}"' for a in extra) if extra else None
+    ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, 1)
     sys.exit(0 if ret > 32 else 1)
 
 
