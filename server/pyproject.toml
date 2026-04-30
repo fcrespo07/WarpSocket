@@ -23,13 +23,15 @@ classifiers = [
 dependencies = [
     "rich>=13.0",
     "cryptography>=42.0",
-    "customtkinter>=5.2",
-    "pillow>=10.0",
-    "pystray>=0.19",
     "platformdirs>=4.0",
 ]
 
 [project.optional-dependencies]
+gui = [
+    "customtkinter>=5.2",
+    "pillow>=10.0",
+    "pystray>=0.19",
+]
 dev = [
     "ruff>=0.5",
     "black>=24.0",

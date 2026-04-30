@@ -416,12 +416,30 @@ function Install-Server {
     }
 
     New-Item -ItemType Directory -Path $INSTALL_PREFIX -Force | Out-Null
+    # Recreate venv if the Python version changed (stale venv from a previous install).
+    $venvPython = Join-Path $INSTALL_PREFIX '.venv\Scripts\python.exe'
+    if (Test-Path $venvPython) {
+        $venvVer = & $venvPython -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+        $sysVer  = & $script:PYTHON_BIN -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+        if ($venvVer -ne $sysVer) {
+            Write-Warn "Venv was created with Python $venvVer, current interpreter is $sysVer — recreating"
+            Remove-Item -Recurse -Force (Join-Path $INSTALL_PREFIX '.venv')
+        }
+    }
     Ensure-Venv -Prefix $INSTALL_PREFIX -Label 'server'
 
     $pip = Join-Path $INSTALL_PREFIX '.venv\Scripts\pip.exe'
-    Write-Info "Installing Python dependencies (this may take ~30-60s)"
-    & $pip install --upgrade --disable-pip-version-check pip
-    & $pip install --disable-pip-version-check -e (Join-Path $script:REPO_DIR 'server')
+
+    Write-Info "Installing core dependencies..."
+    & $pip install --quiet --disable-pip-version-check -e (Join-Path $script:REPO_DIR 'server')
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "pip install (core) failed with exit code $LASTEXITCODE. See output above."
+    }
+    Write-OK "Core dependencies installed"
+
+    Write-Info "Installing GUI dependencies (customtkinter, pillow, pystray)..."
+    & $pip install --quiet --disable-pip-version-check "customtkinter>=5.2" "pillow>=10.0" "pystray>=0.19"
+    $guiPipExit = $LASTEXITCODE
 
     # CLI shim in $WARPSOCKET_DIR (which is in PATH)
     $cliExe  = Join-Path $INSTALL_PREFIX '.venv\Scripts\warpsocket-server.exe'
@@ -429,37 +447,46 @@ function Install-Server {
     "@echo off`r`n`"$cliExe`" %*" | Out-File -FilePath $cliShim -Encoding ascii
     Write-OK "warpsocket-server -> $cliExe"
 
-    # GUI shim
     $guiExe  = Join-Path $INSTALL_PREFIX '.venv\Scripts\warpsocket-server-gui.exe'
-    $guiShim = Join-Path $WARPSOCKET_DIR 'warpsocket-server-gui.bat'
-    "@echo off`r`n`"$guiExe`" %*" | Out-File -FilePath $guiShim -Encoding ascii
-    if (Test-Path $guiExe) {
-        Write-OK "warpsocket-server-gui -> $guiExe"
-    } else {
-        Write-Warn "warpsocket-server-gui.exe not found — GUI deps may have failed to install under Python $( & $script:PYTHON_BIN --version 2>&1)"
+    $script:GUI_AVAILABLE = $false
+
+    if ($guiPipExit -ne 0) {
+        Write-Warn "GUI dependencies failed to install (exit $guiPipExit)."
+        Write-Warn "The server CLI (warpsocket-server) will work, but the GUI tray app won't."
+        Write-Warn "You can retry later: $pip install customtkinter pillow pystray"
+    } elseif (-not (Test-Path $guiExe)) {
+        Write-Warn "warpsocket-server-gui.exe not found after install."
+        Write-Warn "Reinstalling package to regenerate entry points..."
+        & $pip install --quiet --disable-pip-version-check --force-reinstall --no-deps -e (Join-Path $script:REPO_DIR 'server')
     }
 
-    # Startup shortcut (launch tray at login, minimized)
-    $startupDir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
-    $iconFile   = Join-Path $script:REPO_DIR 'server\warpsocket_server\resources\app_icon.ico'
-    $wsh        = New-Object -ComObject WScript.Shell
+    if (Test-Path $guiExe) {
+        $script:GUI_AVAILABLE = $true
 
-    $startupSc = $wsh.CreateShortcut((Join-Path $startupDir 'WarpSocket Server.lnk'))
-    $startupSc.TargetPath       = $guiExe
-    $startupSc.WorkingDirectory = Split-Path $guiExe
-    $startupSc.WindowStyle      = 7  # minimized
-    if (Test-Path $iconFile) { $startupSc.IconLocation = $iconFile }
-    $startupSc.Save()
-    Write-OK "Startup shortcut: $(Join-Path $startupDir 'WarpSocket Server.lnk')"
+        $guiShim = Join-Path $WARPSOCKET_DIR 'warpsocket-server-gui.bat'
+        "@echo off`r`n`"$guiExe`" %*" | Out-File -FilePath $guiShim -Encoding ascii
+        Write-OK "warpsocket-server-gui -> $guiExe"
 
-    # Desktop shortcut
-    $desktopDir = $wsh.SpecialFolders('Desktop')
-    $desktopSc  = $wsh.CreateShortcut((Join-Path $desktopDir 'WarpSocket Server.lnk'))
-    $desktopSc.TargetPath       = $guiExe
-    $desktopSc.WorkingDirectory = Split-Path $guiExe
-    if (Test-Path $iconFile) { $desktopSc.IconLocation = $iconFile }
-    $desktopSc.Save()
-    Write-OK "Desktop shortcut: $(Join-Path $desktopDir 'WarpSocket Server.lnk')"
+        $iconFile   = Join-Path $script:REPO_DIR 'server\warpsocket_server\resources\app_icon.ico'
+        $wsh        = New-Object -ComObject WScript.Shell
+        $startupDir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
+
+        $startupSc = $wsh.CreateShortcut((Join-Path $startupDir 'WarpSocket Server.lnk'))
+        $startupSc.TargetPath       = $guiExe
+        $startupSc.WorkingDirectory = Split-Path $guiExe
+        $startupSc.WindowStyle      = 7
+        if (Test-Path $iconFile) { $startupSc.IconLocation = $iconFile }
+        $startupSc.Save()
+        Write-OK "Startup shortcut: $(Join-Path $startupDir 'WarpSocket Server.lnk')"
+
+        $desktopDir = $wsh.SpecialFolders('Desktop')
+        $desktopSc  = $wsh.CreateShortcut((Join-Path $desktopDir 'WarpSocket Server.lnk'))
+        $desktopSc.TargetPath       = $guiExe
+        $desktopSc.WorkingDirectory = Split-Path $guiExe
+        if (Test-Path $iconFile) { $desktopSc.IconLocation = $iconFile }
+        $desktopSc.Save()
+        Write-OK "Desktop shortcut: $(Join-Path $desktopDir 'WarpSocket Server.lnk')"
+    }
 
     Write-OK "Server installed"
 }
@@ -468,23 +495,31 @@ function Invoke-SetupWizard {
     if ($env:WARPSOCKET_RUN_WIZARD -eq '0') {
         Write-Info "Skipping setup wizard (WARPSOCKET_RUN_WIZARD=0)"
         Write-Host ""
-        Write-Host "  Run the server GUI later with:"
-        Write-Host "    warpsocket-server-gui"
-        Write-Host "  Or use the desktop shortcut: 'WarpSocket Server'"
+        if ($script:GUI_AVAILABLE) {
+            Write-Host "  Run the server GUI later with:"
+            Write-Host "    warpsocket-server-gui"
+            Write-Host "  Or use the desktop shortcut: 'WarpSocket Server'"
+        } else {
+            Write-Host "  Run the CLI setup wizard with:"
+            Write-Host "    warpsocket-server setup"
+        }
         Write-Host ""
         return
     }
+
     Write-Host ""
-    Write-Info "Launching WarpSocket Server..."
-    Write-Host "  The setup wizard will open automatically on first run." -ForegroundColor DarkGray
-    Write-Host ""
-    $guiExe = Join-Path $INSTALL_PREFIX '.venv\Scripts\warpsocket-server-gui.exe'
-    if (-not (Test-Path $guiExe)) {
-        Write-Warn "warpsocket-server-gui.exe not found — skipping auto-launch."
-        Write-Host "  Use the 'WarpSocket Server' desktop shortcut to start manually." -ForegroundColor Yellow
-        return
+    if ($script:GUI_AVAILABLE) {
+        Write-Info "Launching WarpSocket Server GUI..."
+        Write-Host "  The setup wizard will open automatically on first run." -ForegroundColor DarkGray
+        Write-Host ""
+        $guiExe = Join-Path $INSTALL_PREFIX '.venv\Scripts\warpsocket-server-gui.exe'
+        Start-Process -FilePath $guiExe
+    } else {
+        Write-Info "Launching CLI setup wizard (GUI not available)..."
+        Write-Host ""
+        $cliExe = Join-Path $INSTALL_PREFIX '.venv\Scripts\warpsocket-server.exe'
+        & $cliExe setup
     }
-    Start-Process -FilePath $guiExe
 }
 
 # ---------------------------------------------------------------------------
@@ -596,7 +631,9 @@ function Select-Component {
             Write-Host "    2. Use 'Añadir cliente' to generate .warpcfg files for each user."
             Write-Host "    3. Send each .warpcfg to the corresponding client device."
             Write-Host ""
-            Write-Host "  Desktop shortcut : 'WarpSocket Server'"
+            if ($script:GUI_AVAILABLE) {
+                Write-Host "  Desktop shortcut : 'WarpSocket Server'"
+            }
             Write-Host "  CLI (admin PS)   : warpsocket-server <subcommand>"
             Write-Host ""
             Invoke-SetupWizard
