@@ -396,6 +396,21 @@ function Install-Server {
         Write-Fail "Server source not found at $($script:REPO_DIR)\server"
     }
 
+    # WireGuard for Windows (server uses wireguard.exe /installtunnelservice)
+    if (Test-Path $WG_EXE) {
+        Write-OK "WireGuard for Windows: found"
+    } else {
+        if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            Write-Fail "winget not found and WireGuard is missing. Install from https://www.wireguard.com/install/ and retry."
+        }
+        Write-Info "Installing WireGuard for Windows via winget..."
+        & winget install --id WireGuard.WireGuard --source winget --silent --accept-package-agreements --accept-source-agreements
+        if (-not (Test-Path $WG_EXE)) {
+            Write-Fail "WireGuard install failed. Install from https://www.wireguard.com/install/ and retry."
+        }
+        Write-OK "WireGuard installed"
+    }
+
     New-Item -ItemType Directory -Path $INSTALL_PREFIX -Force | Out-Null
     Ensure-Venv -Prefix $INSTALL_PREFIX -Label 'server'
 
@@ -404,11 +419,39 @@ function Install-Server {
     & $pip install --upgrade --disable-pip-version-check pip
     & $pip install --disable-pip-version-check -e (Join-Path $script:REPO_DIR 'server')
 
-    # Shim in $WARPSOCKET_DIR (which is in PATH)
-    $exePath  = Join-Path $INSTALL_PREFIX '.venv\Scripts\warpsocket-server.exe'
-    $shimPath = Join-Path $WARPSOCKET_DIR 'warpsocket-server.bat'
-    "@echo off`r`n`"$exePath`" %*" | Out-File -FilePath $shimPath -Encoding ascii
-    Write-OK "warpsocket-server -> $exePath"
+    # CLI shim in $WARPSOCKET_DIR (which is in PATH)
+    $cliExe  = Join-Path $INSTALL_PREFIX '.venv\Scripts\warpsocket-server.exe'
+    $cliShim = Join-Path $WARPSOCKET_DIR 'warpsocket-server.bat'
+    "@echo off`r`n`"$cliExe`" %*" | Out-File -FilePath $cliShim -Encoding ascii
+    Write-OK "warpsocket-server -> $cliExe"
+
+    # GUI shim
+    $guiExe  = Join-Path $INSTALL_PREFIX '.venv\Scripts\warpsocket-server-gui.exe'
+    $guiShim = Join-Path $WARPSOCKET_DIR 'warpsocket-server-gui.bat'
+    "@echo off`r`n`"$guiExe`" %*" | Out-File -FilePath $guiShim -Encoding ascii
+    Write-OK "warpsocket-server-gui -> $guiExe"
+
+    # Startup shortcut (launch tray at login, minimized)
+    $startupDir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
+    $iconFile   = Join-Path $script:REPO_DIR 'server\warpsocket_server\resources\app_icon.ico'
+    $wsh        = New-Object -ComObject WScript.Shell
+
+    $startupSc = $wsh.CreateShortcut((Join-Path $startupDir 'WarpSocket Server.lnk'))
+    $startupSc.TargetPath       = $guiExe
+    $startupSc.WorkingDirectory = Split-Path $guiExe
+    $startupSc.WindowStyle      = 7  # minimized
+    if (Test-Path $iconFile) { $startupSc.IconLocation = $iconFile }
+    $startupSc.Save()
+    Write-OK "Startup shortcut: $(Join-Path $startupDir 'WarpSocket Server.lnk')"
+
+    # Desktop shortcut
+    $desktopDir = $wsh.SpecialFolders('Desktop')
+    $desktopSc  = $wsh.CreateShortcut((Join-Path $desktopDir 'WarpSocket Server.lnk'))
+    $desktopSc.TargetPath       = $guiExe
+    $desktopSc.WorkingDirectory = Split-Path $guiExe
+    if (Test-Path $iconFile) { $desktopSc.IconLocation = $iconFile }
+    $desktopSc.Save()
+    Write-OK "Desktop shortcut: $(Join-Path $desktopDir 'WarpSocket Server.lnk')"
 
     Write-OK "Server installed"
 }
@@ -417,16 +460,18 @@ function Invoke-SetupWizard {
     if ($env:WARPSOCKET_RUN_WIZARD -eq '0') {
         Write-Info "Skipping setup wizard (WARPSOCKET_RUN_WIZARD=0)"
         Write-Host ""
-        Write-Host "  Run the wizard later with:"
-        Write-Host "    warpsocket-server setup"
+        Write-Host "  Run the server GUI later with:"
+        Write-Host "    warpsocket-server-gui"
+        Write-Host "  Or use the desktop shortcut: 'WarpSocket Server'"
         Write-Host ""
         return
     }
     Write-Host ""
-    Write-Info "Launching the setup wizard..."
+    Write-Info "Launching WarpSocket Server..."
+    Write-Host "  The setup wizard will open automatically on first run." -ForegroundColor DarkGray
     Write-Host ""
-    $exePath = Join-Path $INSTALL_PREFIX '.venv\Scripts\warpsocket-server.exe'
-    & $exePath setup
+    $guiExe = Join-Path $INSTALL_PREFIX '.venv\Scripts\warpsocket-server-gui.exe'
+    Start-Process -FilePath $guiExe
 }
 
 # ---------------------------------------------------------------------------
@@ -528,7 +573,21 @@ function Select-Component {
     }
 
     switch ($component) {
-        'server' { Install-Server; Invoke-SetupWizard }
+        'server' {
+            Install-Server
+            Write-Host ""
+            Write-Host "  Server installed." -ForegroundColor Green
+            Write-Host ""
+            Write-Host "  Next steps:"
+            Write-Host "    1. The setup wizard will open automatically on first launch."
+            Write-Host "    2. Use 'Añadir cliente' to generate .warpcfg files for each user."
+            Write-Host "    3. Send each .warpcfg to the corresponding client device."
+            Write-Host ""
+            Write-Host "  Desktop shortcut : 'WarpSocket Server'"
+            Write-Host "  CLI (admin PS)   : warpsocket-server <subcommand>"
+            Write-Host ""
+            Invoke-SetupWizard
+        }
         'client' { Install-Client }
         default  { Write-Fail "Unknown component: $component (must be 'server' or 'client')" }
     }

@@ -165,9 +165,18 @@ class TestStubPlatforms:
         with pytest.raises(PlatformError, match="not implemented"):
             p.is_wstunnel_running()
 
-    def test_windows_raises_not_implemented(self) -> None:
+    def test_windows_wstunnel_service_is_noop(self) -> None:
         from warpsocket_server.platforms.windows import WindowsServerPlatform
+        from unittest.mock import patch
 
         p = WindowsServerPlatform()
-        with pytest.raises(PlatformError, match="not implemented"):
-            p.is_wstunnel_running()
+        # install/uninstall are no-ops on Windows (ServerManager owns wstunnel)
+        p.install_wstunnel_service(443, Path("/c"), Path("/k"), "x", 51820, Path("/b"))
+        p.uninstall_wstunnel_service()
+
+        # is_wstunnel_running checks via tasklist; mock subprocess so it works off-platform
+        with patch(
+            "warpsocket_server.platforms.windows._run",
+            return_value=type("R", (), {"stdout": "", "returncode": 0})(),
+        ):
+            assert p.is_wstunnel_running() is False

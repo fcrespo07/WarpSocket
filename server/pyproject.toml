@@ -23,6 +23,10 @@ classifiers = [
 dependencies = [
     "rich>=13.0",
     "cryptography>=42.0",
+    "customtkinter>=5.2",
+    "pillow>=10.0",
+    "pystray>=0.19",
+    "platformdirs>=4.0",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +38,7 @@ dev = [
 
 [project.scripts]
 warpsocket-server = "warpsocket_server.cli:main"
+warpsocket-server-gui = "warpsocket_server.server_app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["warpsocket_server"]

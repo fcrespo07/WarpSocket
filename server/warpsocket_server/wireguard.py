@@ -68,6 +68,30 @@ def get_live_peers(interface: str = "wg0", wg_bin: Path | None = None) -> dict[s
     return peers
 
 
+def build_server_wg_conf_windows(config: ServerConfig) -> str:
+    """Build the server-side WireGuard config for Windows.
+
+    WireGuard for Windows does not support PostUp/PostDown scripts.
+    NAT and IP forwarding are handled separately by WindowsServerPlatform.prepare_system().
+    """
+    lines = [
+        "[Interface]",
+        f"PrivateKey = {config.wg_private_key}",
+        f"Address = {config.server_address}",
+        f"ListenPort = {config.wg_listen_port}",
+    ]
+
+    for client in config.clients:
+        lines.append("")
+        lines.append("[Peer]")
+        lines.append(f"# {client.name}")
+        lines.append(f"PublicKey = {client.public_key}")
+        lines.append(f"AllowedIPs = {client.address}")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
 def build_server_wg_conf(config: ServerConfig) -> str:
     """Build the server-side wg0.conf content."""
     subnet = config.subnet

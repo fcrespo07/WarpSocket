@@ -64,6 +64,13 @@ class ServerPlatform(ABC):
     def wg_config_dir(self) -> Path:
         ...
 
+    def prepare_system(self, subnet: str, wss_port: int) -> None:
+        """One-time OS-level setup: IP forwarding, NAT, firewall rules.
+
+        Called once after first-run setup wizard completes.
+        The default implementation is a no-op (Linux/macOS use PostUp hooks).
+        """
+
     def install_prefix(self) -> Path | None:
         """Where the OS installer puts the venv/bundle. None if not applicable."""
         return None

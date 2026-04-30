@@ -58,9 +58,9 @@ def test_build_warpcfg_wireguard_section() -> None:
     assert wg["tunnel_name"] == "WarpSocket"
 
 
-def test_build_warpcfg_tunnel_points_to_server_ip() -> None:
+def test_build_warpcfg_tunnel_points_to_loopback() -> None:
     cfg = build_warpcfg(_make_server_config(), "laptop", "client_priv", "10.0.0.2/32")
-    assert cfg["tunnel"]["remote_host"] == "10.0.0.1"
+    assert cfg["tunnel"]["remote_host"] == "127.0.0.1"
     assert cfg["tunnel"]["remote_port"] == 51820
 
 
