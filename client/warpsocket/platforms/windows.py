@@ -6,14 +6,14 @@ import subprocess
 import time
 from pathlib import Path
 
-from platformdirs import user_data_dir
-
 from .base import Platform, PlatformError
 
 log = logging.getLogger(__name__)
 
-_APP_NAME = "WarpSocket"
 _WIREGUARD_EXE = Path(r"C:\Program Files\WireGuard\wireguard.exe")
+# C:\ProgramData\WireGuard is where wireguard.exe /installtunnelservice expects
+# to find conf files — the service runs as LocalSystem and cannot access %LOCALAPPDATA%.
+_WG_CONF_DIR = Path(r"C:\ProgramData\WireGuard")
 _IPV4_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW
 
@@ -25,7 +25,7 @@ def _run(*args: str, **kwargs) -> subprocess.CompletedProcess:
 
 class WindowsPlatform(Platform):
     def __init__(self) -> None:
-        self._conf_dir = Path(user_data_dir(_APP_NAME)) / "wireguard"
+        self._conf_dir = _WG_CONF_DIR
 
     def install_wg_tunnel(self, name: str, config_text: str) -> Path:
         self._require_wireguard()
@@ -44,15 +44,25 @@ class WindowsPlatform(Platform):
                 f"Failed to install WireGuard tunnel '{name}': "
                 f"{(result.stderr or result.stdout).strip()}"
             )
+        if result.stdout.strip():
+            log.info("wireguard /installtunnelservice: %s", result.stdout.strip())
         # /installtunnelservice returns before the service reaches RUNNING; poll until it does
         # so that is_wg_tunnel_active() returns True by the time wstunnel starts.
         deadline = time.monotonic() + 15.0
+        last_state = "(no output)"
         while time.monotonic() < deadline:
-            if _run(["sc", "query", f"WireGuardTunnel${name}"]).stdout.find("RUNNING") != -1:
+            query = _run(["sc", "query", f"WireGuardTunnel${name}"])
+            last_state = query.stdout.strip() or f"(rc={query.returncode})"
+            if "RUNNING" in query.stdout:
                 break
             time.sleep(0.25)
         else:
-            log.warning("WireGuard tunnel '%s' did not reach RUNNING within timeout", name)
+            log.warning("WireGuard service state at timeout:\n%s", last_state)
+            _run([str(_WIREGUARD_EXE), "/uninstalltunnelservice", name])
+            raise PlatformError(
+                f"WireGuard tunnel '{name}' did not reach RUNNING within 15 s — "
+                "ensure the client runs as Administrator and WireGuard is fully installed."
+            )
         return conf_path
 
     def uninstall_wg_tunnel(self, name: str) -> None:
