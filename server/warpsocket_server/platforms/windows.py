@@ -135,6 +135,10 @@ class WindowsServerPlatform(ServerPlatform):
             log.info("IP routing enabled via registry")
         except OSError as exc:
             log.warning("Could not enable IP routing in registry: %s", exc)
+        # Also activate immediately without requiring a reboot.
+        result = _ps("Get-NetIPInterface | Set-NetIPInterface -Forwarding Enabled")
+        if result.returncode != 0:
+            log.warning("Could not enable forwarding via Set-NetIPInterface: %s", result.stderr.strip())
 
     def _create_nat(self, subnet: str) -> None:
         check = _ps(
