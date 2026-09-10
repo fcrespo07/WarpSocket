@@ -916,7 +916,7 @@ write_client_helper() {
 # whitelists this script for the desktop user.
 set -euo pipefail
 
-WG_CONF_DIR="/etc/wireguard"
+WG_CONF_DIR="/etc/wireguard-outwarp"
 NAME_RE='^[A-Za-z0-9_=+.-]{1,15}$'
 IPV4_RE='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
 
@@ -937,13 +937,18 @@ case "$cmd" in
         # write the WG private key to a user-readable temp file.
         cat > "$conf"
         chmod 0600 "$conf"
-        wg-quick down "$name" >/dev/null 2>&1 || true
-        exec wg-quick up "$name"
+        # Pass the full path (not the bare name) so wg-quick never touches
+        # /etc/wireguard — other tools (e.g. omarchy-vpn) scan that directory
+        # and adopt any .conf they find as one of their own managed tunnels,
+        # which fights OutWarp for control of its own interface.
+        wg-quick down "$conf" >/dev/null 2>&1 || true
+        exec wg-quick up "$conf"
         ;;
     down)
         name="${1:-}"; need_name "$name"
-        wg-quick down "$name" >/dev/null 2>&1 || true
-        rm -f "$WG_CONF_DIR/$name.conf"
+        conf="$WG_CONF_DIR/$name.conf"
+        wg-quick down "$conf" >/dev/null 2>&1 || true
+        rm -f "$conf"
         ;;
     is-active)
         name="${1:-}"; need_name "$name"

@@ -9,9 +9,13 @@ from pathlib import Path
 
 from .base import Platform, PlatformError
 
-# Directory where wg-quick reads tunnel configs by default. The privileged
-# helper writes here; LinuxPlatform itself never touches it directly.
-_WG_CONF_DIR = Path("/etc/wireguard")
+# Directory where the privileged helper writes tunnel configs.
+# Deliberately NOT /etc/wireguard: other WireGuard-aware tools (e.g.
+# omarchy-vpn) scan that directory and adopt any .conf they find as one of
+# their own managed tunnels, which fights OutWarp for control of its own
+# interface. LinuxPlatform itself never touches this path directly — only
+# the privileged helper does.
+_WG_CONF_DIR = Path("/etc/wireguard-outwarp")
 
 # Default install location of the privileged helper script. The installer
 # drops this; tests / dev environments override via OUTWARP_HELPER.
@@ -38,10 +42,10 @@ def _autostart_dir() -> Path:
 class LinuxPlatform(Platform):
     """Linux client platform.
 
-    All privileged operations (writing to /etc/wireguard, wg-quick up/down,
-    `ip route add/del`) are funnelled through a single helper script. The
-    installer drops a sudoers.d rule whitelisting just that helper for the
-    desktop user, so `sudo -n` never prompts.
+    All privileged operations (writing to /etc/wireguard-outwarp, wg-quick
+    up/down, `ip route add/del`) are funnelled through a single helper
+    script. The installer drops a sudoers.d rule whitelisting just that
+    helper for the desktop user, so `sudo -n` never prompts.
 
     Running the tray as root (e.g. `sudo outwarp`) also works: when
     `os.geteuid() == 0`, the sudo prefix is skipped and the helper is invoked

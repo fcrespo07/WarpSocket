@@ -275,9 +275,11 @@ def test_linux_install_wg_tunnel_invokes_helper_with_conf_on_stdin(linux_helper)
     with patch("subprocess.run", return_value=_mock_run(0)) as mock_run:
         path = p.install_wg_tunnel("OutWarp", "[Interface]\nPrivateKey=k\n")
 
-    # Returned path is the canonical /etc/wireguard location written by the helper.
+    # Returned path is OutWarp's private conf dir, not /etc/wireguard — other
+    # WireGuard tools (e.g. omarchy-vpn) scan that directory and adopt any
+    # .conf they find, fighting OutWarp for control of its own interface.
     from pathlib import Path
-    assert path == Path("/etc/wireguard/OutWarp.conf")
+    assert path == Path("/etc/wireguard-outwarp/OutWarp.conf")
 
     cmd = mock_run.call_args[0][0]
     assert cmd == [str(linux_helper), "up", "OutWarp"]
